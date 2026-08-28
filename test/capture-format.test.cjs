@@ -72,6 +72,56 @@ test("two captures appended to one file both parse back, in order", () => {
 	assert.deepEqual(parsed[1], second);
 });
 
+/*
+The cases below lock the format contract against passages that look like
+format syntax. TCK-053 and TCK-054 both parse this file, so a passage that
+can forge a block boundary or a field is a correctness problem for them, not
+a cosmetic one. Quote lines carry a blockquote prefix, which is what makes
+these safe; these tests exist so a later change cannot quietly drop it.
+*/
+
+const HOSTILE_QUOTES = {
+	"a horizontal rule, which is also the block separator": "before\n---\nafter",
+	"a forged capture heading and attribute line": "## Capture 20260101T000000000-forged\n\n- id: spoofed",
+	"a passage that was already a blockquote": "> already quoted",
+	"a passage indented like a code block": "    indented code",
+	"a passage ending in a blank line": "text\n",
+};
+
+for (const [description, quote] of Object.entries(HOSTILE_QUOTES)) {
+	test(`a quote containing ${description} round-trips and forges no extra block`, () => {
+		const capture = {
+			id: "20260827T000000000-cccccc",
+			status: "captured",
+			captured: "2026-08-27T00:00:00.000Z",
+			source: "wiki/a.md",
+			location: "A heading",
+			quote,
+		};
+
+		const parsed = parseCaptures(serializeCapture(capture));
+
+		assert.equal(parsed.length, 1);
+		assert.deepEqual(parsed[0], capture);
+	});
+}
+
+test("an attribute value containing a colon and a space keeps its whole value", () => {
+	const capture = {
+		id: "20260827T000000000-dddddd",
+		status: "captured",
+		captured: "2026-08-27T00:00:00.000Z",
+		source: "wiki/a.md",
+		location: "Note: caveat: detail",
+		quote: "plain",
+	};
+
+	const parsed = parseCaptures(serializeCapture(capture));
+
+	assert.equal(parsed.length, 1);
+	assert.equal(parsed[0].location, "Note: caveat: detail");
+});
+
 test("generateCaptureId produces distinct ids on successive calls", () => {
 	const ids = new Set();
 	for (let i = 0; i < 50; i++) {
