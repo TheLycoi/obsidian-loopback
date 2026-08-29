@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test:build": "esbuild capture-format.ts --bundle --platform=node --format=cjs --outfile=.test-build/capture-format.cjs",
-    "test": "npm run test:build && node test/capture-format.test.cjs"
+    "test:build": "esbuild capture-format.ts --bundle --platform=node --format=cjs --outfile=.test-build/capture-format.cjs && esbuild linter.ts --bundle --platform=node --format=cjs --outfile=.test-build/linter.cjs && esbuild passage-splitter.ts --bundle --platform=node --format=cjs --outfile=.test-build/passage-splitter.cjs && esbuild keys.ts --bundle --platform=node --format=cjs --outfile=.test-build/keys.cjs && esbuild draft-parsing.ts --bundle --platform=node --format=cjs --outfile=.test-build/draft-parsing.cjs && esbuild draft-format.ts --bundle --platform=node --format=cjs --outfile=.test-build/draft-format.cjs && esbuild drafting.ts --bundle --platform=node --format=cjs --loader:.md=text --outfile=.test-build/drafting.cjs && esbuild prompt-registry.ts --bundle --platform=node --format=cjs --loader:.md=text --outfile=.test-build/prompt-registry.cjs",
+    "test": "npm run test:build && node --test test/*.test.cjs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

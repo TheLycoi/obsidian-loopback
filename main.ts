@@ -10,8 +10,34 @@ network call, no model, no AnkiConnect. Those arrive in later tickets.
 import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
 import { Capture, generateCaptureId, serializeCapture } from "./capture-format";
 import { DEFAULT_SETTINGS, LoopbackSettings, LoopbackSettingTab } from "./settings";
+import { runDraftingCommand } from "./drafting-command";
+import type { DraftAdapter } from "./adapter";
+import { AnthropicAdapter } from "./adapters/anthropic";
+import { OpenAiCompatibleAdapter } from "./adapters/openai-compatible";
 
 const HEADING_PATTERN = /^#{1,6}\s+.+/;
+
+/** Build the adapter the current settings point at. Drafting only, never called from captureSelection. */
+function buildDraftAdapter(settings: LoopbackSettings): DraftAdapter {
+	const vaultKey = settings.apiKeySource === "vault" ? settings.vaultApiKey : undefined;
+
+	if (settings.provider === "anthropic") {
+		return new AnthropicAdapter({
+			modelId: settings.modelId,
+			apiKeySource: settings.apiKeySource,
+			envVarName: settings.envVarName,
+			vaultKey,
+		});
+	}
+
+	return new OpenAiCompatibleAdapter({
+		modelId: settings.modelId,
+		baseUrl: settings.openAiBaseUrl,
+		apiKeySource: settings.apiKeySource,
+		envVarName: settings.envVarName,
+		vaultKey,
+	});
+}
 
 export default class LoopbackPlugin extends Plugin {
 	settings: LoopbackSettings;
@@ -25,6 +51,16 @@ export default class LoopbackPlugin extends Plugin {
 			hotkeys: [{ modifiers: ["Mod", "Shift"], key: "L" }],
 			editorCallback: (editor: Editor, view: MarkdownView) => {
 				void this.captureSelection(editor, view);
+			},
+		});
+
+		this.addCommand({
+			id: "draft-pending-captures",
+			name: "Draft pending captures",
+			callback: () => {
+				// Fire and forget: drafting is asynchronous by design and must never
+				// block the command palette or the editor the way capture never does.
+				void runDraftingCommand(this.app, this.settings.inboxPath, buildDraftAdapter(this.settings));
 			},
 		});
 
