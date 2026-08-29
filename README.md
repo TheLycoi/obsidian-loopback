@@ -12,8 +12,11 @@ else is broken, so it makes no network call and depends on nothing outside
 the vault. Highlight a passage, press one key, and the passage lands in a
 file with its provenance attached. Drafting sits on top of capture and runs
 on its own command, so a slow or failing model call can never add latency
-to a capture. Exporting approved cards to Anki is a separate piece built on
-top of this one and is not in this repository yet.
+to a capture. A review queue sits on top of drafting: a human looks at each
+candidate card beside the passage it came from and approves, edits then
+approves, or discards it. Approving is the one action that sends a card to
+Anki over AnkiConnect. Nothing in this repository writes a card any other
+way.
 
 ## What it does today
 
@@ -29,10 +32,13 @@ top of this one and is not in this repository yet.
   still marked `captured`, sends its passage to whichever provider is
   configured in Settings, and appends the candidate cards it gets back as
   draft blocks in the same inbox file. See "Drafting" below.
+- Command: "Open review queue." Opens a view listing every pending draft
+  beside the source passage it came from. Approve, edit then approve, or
+  discard each one; bulk approve and bulk discard act on whatever is
+  checked. See "Review queue and export" below.
 - A settings tab holds the inbox file path, the drafting provider and model
-  id, where the API key is read from, and the AnkiConnect URL the export
-  step will eventually call. The AnkiConnect URL is not used by anything in
-  this repository yet.
+  id, where the API key is read from, the AnkiConnect URL, the export deck,
+  and the disposition log path.
 
 ## What it deliberately does not do
 
@@ -44,8 +50,9 @@ is down or Anki is closed. Drafting does make a model call, but only on its
 own command, never on the capture path, so capture's latency is unaffected
 by whether drafting is slow, failing, or misconfigured.
 
-No card reaches Anki from this repository. Drafting proposes candidate
-cards; nothing here approves one or writes one to a collection.
+No card reaches Anki without a human pressing approve on that specific
+draft in the review queue. There is no setting, confidence threshold, or
+batch job that approves a card on its own; drafting only ever proposes.
 
 ## The capture block format
 
@@ -143,6 +150,58 @@ first, the OS keychain second, and an in-vault setting last, read only when
 the owner has explicitly chosen it. A key is never logged, never written to
 the inbox file, and never included in an error message.
 
+## Review queue and export
+
+The "Open review queue" command opens a view listing every draft still
+marked `draft` or `flagged`, each beside the source passage and location
+its capture recorded. Drafts older than 30 days appear in a stale section
+at the top, since an inbox that only fills is a failure on its own and the
+fix is visibility, not silent expiry: nothing here ever deletes a draft or
+a capture. Capturing a new passage is refused, with a Notice explaining
+why, once more than 50 drafts are pending; the fix is clearing the queue,
+not raising the ceiling.
+
+Three actions exist per draft, and no others:
+
+- **Approve.** One key ("a" on a focused draft row, or a button) sends the
+  draft to Anki exactly as drafted.
+- **Edit then approve.** The card text and Back Extra are editable inline;
+  saving approves the edited version.
+- **Discard.** One key ("d," or a button). The draft's text is kept in the
+  inbox, marked `discarded`, never deleted.
+
+Bulk approve and bulk discard act on every checked draft. Approving, alone
+or in bulk, is the only way a card reaches Anki: it is the reviewer's own
+action, not a setting, and there is no confidence threshold or batch job
+that approves a card on its own.
+
+Approving triggers an export attempt over AnkiConnect immediately, so
+approve and export are the same reviewer decision. Export, in order:
+
+1. A collection-wide duplicate search (no deck restriction) for the card's
+   own text. A hit blocks the write and reports what it matched; nothing is
+   written on a duplicate.
+2. `addNote`, to the deck named in Settings (`All::2 Default::Wiki` by
+   default), using the existing `Cloze` model for a card with cloze markup
+   or `Basic` otherwise, tagged `wiki::<page-slug>`. No new note type is
+   ever created.
+3. The draft is marked `exported` in the inbox, and the seed is written
+   back to the source page: a bullet in that page's `## Flashcard Seeds`
+   section and an update to its `cards:` frontmatter (`deck`, `count`,
+   `note_ids`). A source page that does not exist is created first with a
+   minimal frontmatter, so a seed is never orphaned.
+
+Anki being closed, or AnkiConnect being unreachable at all, is caught as
+one case: a Notice explains it, and the draft is left `approved`, pending
+export, rather than lost or silently retried. Running "Open review queue"
+and approving again later, or a future bulk export over every `approved`
+draft, is how it resolves; nothing retries in the background.
+
+Every approve, edit-then-approve, and discard is appended, one line per
+entry, to the disposition log (`loopback-disposition-log.md` by default),
+with the prompt version, the model id, and a timestamp. This file is
+append-only and plain text, so the owner can open and read it directly.
+
 ## Settings
 
 - **Inbox file path.** Vault-relative path to the file captures are
@@ -164,9 +223,16 @@ the inbox file, and never included in an error message.
   OpenAI-compatible.
 - **In-vault API key.** Used only when the API key source above is set to
   vault. Left blank by default for the reason given above.
-- **AnkiConnect URL.** The address a later export step will call. Defaults
-  to `http://localhost:8765`, the AnkiConnect default. Not used by capture
-  or drafting.
+- **AnkiConnect URL.** The address the export step calls. Defaults to
+  `http://localhost:8765`, the AnkiConnect default. Not used by capture or
+  drafting.
+- **Export deck.** The Anki deck an approved draft exports to. Defaults to
+  `All::2 Default::Wiki`. Export refuses outright if this is set to a deck
+  name starting with `#`, since those are filtered utility decks Anki
+  rebuilds.
+- **Disposition log path.** Vault-relative path to the append-only log of
+  every approve, edit-then-approve, and discard. Defaults to
+  `loopback-disposition-log.md` at the vault root.
 
 ## Development
 
@@ -199,6 +265,22 @@ Bundles each module under test to CommonJS with esbuild and runs every
 - `passage-splitter.test.cjs`: a short passage left whole, an oversized
   passage split along paragraph breaks, and a single oversized paragraph
   split along sentence breaks.
+- `draft-format.test.cjs` and `draft-format-block.test.cjs`: the round-trip
+  test for the draft block, and finding and replacing one draft block by id
+  without disturbing the blocks before or after it.
+- `review-actions.test.cjs`: approve, edit then approve, and discard, each
+  producing the right status change and the right disposition log entry,
+  plus their bulk forms.
+- `review-queue.test.cjs`: grouping drafts by the capture they came from,
+  the 30-day stale split, orphan drafts, and the 50-pending-draft ceiling.
+- `disposition-log.test.cjs`: the log line format round-trips, and
+  appending never merges two entries onto the same line.
+- `anki-note.test.cjs`: Cloze versus Basic model detection, field names,
+  the `wiki::<page-slug>` tag, and the duplicate search query.
+- `anki-client.test.cjs`: every AnkiConnect action, against an injected
+  fake fetch, including the error and unreachable-network cases.
+- `seed-writeback.test.cjs`: appending a Flashcard Seeds bullet with and
+  without an existing section, and updating the `cards:` frontmatter block.
 
 No test in this repository makes a network call or uses a real API key.
 

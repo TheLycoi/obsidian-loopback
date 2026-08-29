@@ -1,19 +1,25 @@
 /*
-Loopback: capture selection.
+Loopback: the plugin shell. Wires three commands to the modules that do the
+actual work, and wires the review queue view.
 
-This is the forward path's first step and the only piece that has to work
-when everything else is broken. It reads the current editor selection,
-attaches provenance, and appends a Markdown block to the inbox file. No
-network call, no model, no AnkiConnect. Those arrive in later tickets.
+Capture selection is the forward path's first step and the only piece that
+has to work when everything else is broken: it reads the current editor
+selection, attaches provenance, and appends a Markdown block to the inbox
+file, with no network call and no model. Draft pending captures and open
+review queue both build on top of it, on their own commands, so a slow
+model call or a closed instance of Anki can never add latency to capture.
 */
 
-import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
+import { Editor, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { Capture, generateCaptureId, serializeCapture } from "./capture-format";
 import { DEFAULT_SETTINGS, LoopbackSettings, LoopbackSettingTab } from "./settings";
 import { runDraftingCommand } from "./drafting-command";
 import type { DraftAdapter } from "./adapter";
 import { AnthropicAdapter } from "./adapters/anthropic";
 import { OpenAiCompatibleAdapter } from "./adapters/openai-compatible";
+import { MAX_PENDING_DRAFTS } from "./review-queue";
+import { shouldRefuseCapture } from "./review-orchestrator";
+import { ReviewQueueView, VIEW_TYPE_REVIEW_QUEUE } from "./review-view";
 
 const HEADING_PATTERN = /^#{1,6}\s+.+/;
 
@@ -45,6 +51,8 @@ export default class LoopbackPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
+		this.registerView(VIEW_TYPE_REVIEW_QUEUE, (leaf) => new ReviewQueueView(leaf, this));
+
 		this.addCommand({
 			id: "capture-selection",
 			name: "Capture selection",
@@ -64,7 +72,32 @@ export default class LoopbackPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "open-review-queue",
+			name: "Open review queue",
+			callback: () => {
+				void this.openReviewQueue();
+			},
+		});
+
 		this.addSettingTab(new LoopbackSettingTab(this.app, this));
+	}
+
+	async onunload(): Promise<void> {
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_REVIEW_QUEUE);
+	}
+
+	/** Reveal the review queue in the right sidebar, reusing an existing leaf rather than opening a second one. */
+	async openReviewQueue(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW_QUEUE);
+		let leaf: WorkspaceLeaf;
+		if (existing.length > 0) {
+			leaf = existing[0];
+		} else {
+			leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
+			await leaf.setViewState({ type: VIEW_TYPE_REVIEW_QUEUE, active: true });
+		}
+		void this.app.workspace.revealLeaf(leaf);
 	}
 
 	async loadSettings(): Promise<void> {
@@ -80,6 +113,17 @@ export default class LoopbackPlugin extends Plugin {
 		const selection = editor.getSelection();
 		if (selection.trim().length === 0) {
 			new Notice("Loopback: nothing selected, nothing captured.");
+			return;
+		}
+
+		// Decision 5: an inbox that only fills is a failure mode, and the fix
+		// is a hard stop, not silent auto-expiry that would destroy a captured
+		// atom. This refuses the capture itself, before anything is written,
+		// rather than accepting it and refusing to draft it later.
+		if (await shouldRefuseCapture(this.app, this.settings)) {
+			new Notice(
+				`Loopback: capture refused. More than ${MAX_PENDING_DRAFTS} drafts are pending review. Open the review queue and clear some before capturing more.`
+			);
 			return;
 		}
 

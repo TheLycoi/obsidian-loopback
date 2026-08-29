@@ -1,0 +1,83 @@
+/*
+Loopback review queue styling. Kept small and dense on purpose: decision 6
+targets under 10 seconds per draft, which means as many drafts as possible
+fit on screen at once, with no wasted vertical space between them.
+*/
+
+.loopback-review-queue {
+	font-size: 0.9em;
+}
+
+.loopback-review-header h3 {
+	margin: 0 0 0.25em 0;
+}
+
+.loopback-bulk-row {
+	display: flex;
+	gap: 0.5em;
+	margin-bottom: 0.5em;
+}
+
+.loopback-group {
+	border-top: 1px solid var(--background-modifier-border);
+	padding: 0.35em 0;
+}
+
+.loopback-passage-meta {
+	font-size: 0.85em;
+	color: var(--text-muted);
+}
+
+.loopback-passage blockquote {
+	margin: 0.15em 0 0.35em 0;
+	padding: 0.15em 0.6em;
+	border-left: 2px solid var(--text-faint);
+	color: var(--text-muted);
+}
+
+.loopback-draft-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.5em;
+	padding: 0.2em 0;
+}
+
+.loopback-draft-row:focus {
+	outline: 1px solid var(--interactive-accent);
+}
+
+.loopback-draft-body {
+	flex: 1;
+	min-width: 0;
+}
+
+.loopback-card-text {
+	white-space: pre-wrap;
+}
+
+.loopback-back-extra {
+	color: var(--text-muted);
+	font-size: 0.9em;
+}
+
+.loopback-flag {
+	color: var(--text-error);
+	font-size: 0.85em;
+}
+
+.loopback-actions {
+	display: flex;
+	gap: 0.3em;
+	flex-wrap: wrap;
+}
+
+.loopback-actions button {
+	padding: 0.1em 0.5em;
+}
+
+.loopback-edit-card,
+.loopback-edit-back {
+	width: 100%;
+	min-height: 2.5em;
+	margin-bottom: 0.2em;
+}

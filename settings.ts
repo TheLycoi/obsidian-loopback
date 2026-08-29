@@ -29,6 +29,10 @@ export interface LoopbackSettings {
 	 * iCloud in plaintext. Left blank by default for that reason.
 	 */
 	vaultApiKey: string;
+	/** The Anki deck an approved draft exports to. Section 3 of CLAUDE.md sets the default; export refuses outright if this is ever changed to a name starting with "#". */
+	exportDeck: string;
+	/** Vault-relative path to the append-only disposition log: every approve, edit-then-approve, and discard, with a timestamp. */
+	dispositionLogPath: string;
 }
 
 export const DEFAULT_SETTINGS: LoopbackSettings = {
@@ -40,6 +44,8 @@ export const DEFAULT_SETTINGS: LoopbackSettings = {
 	envVarName: "ANTHROPIC_API_KEY",
 	openAiBaseUrl: "https://openrouter.ai/api/v1",
 	vaultApiKey: "",
+	exportDeck: "All::2 Default::Wiki",
+	dispositionLogPath: "loopback-disposition-log.md",
 };
 
 export class LoopbackSettingTab extends PluginSettingTab {
@@ -146,6 +152,34 @@ export class LoopbackSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.openAiBaseUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.openAiBaseUrl = value.trim() || DEFAULT_SETTINGS.openAiBaseUrl;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Export deck")
+			.setDesc(
+				'The Anki deck an approved draft exports to. Defaults to the wiki convention, All::2 Default::Wiki. Export refuses outright if this is set to a deck name starting with "#", since those are filtered utility decks Anki rebuilds.'
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.exportDeck)
+					.setValue(this.plugin.settings.exportDeck)
+					.onChange(async (value) => {
+						this.plugin.settings.exportDeck = value.trim() || DEFAULT_SETTINGS.exportDeck;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Disposition log path")
+			.setDesc("Vault-relative path to the append-only log of every approve, edit-then-approve, and discard.")
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.dispositionLogPath)
+					.setValue(this.plugin.settings.dispositionLogPath)
+					.onChange(async (value) => {
+						this.plugin.settings.dispositionLogPath = value.trim() || DEFAULT_SETTINGS.dispositionLogPath;
 						await this.plugin.saveSettings();
 					})
 			);

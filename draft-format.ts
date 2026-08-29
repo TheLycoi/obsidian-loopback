@@ -11,7 +11,15 @@ so it can be unit tested with plain Node.
 
 import type { LintFailure } from "./linter";
 
-export type DraftStatus = "draft" | "flagged";
+/**
+ * The review queue (a later module) adds three statuses on top of the two
+ * the linter writes: "approved" once a human has said yes (clean or after
+ * an edit), "exported" once the card is confirmed written to Anki, and
+ * "discarded" once a human has said no. No code path may write "approved"
+ * or "exported" except the explicit human actions in review-actions.ts and
+ * the export step that runs only after a draft is already "approved".
+ */
+export type DraftStatus = "draft" | "flagged" | "approved" | "exported" | "discarded";
 
 export interface DraftRecord {
 	id: string;
@@ -98,4 +106,64 @@ export function parseDrafts(fileContent: string): DraftRecord[] {
 		});
 	}
 	return drafts;
+}
+
+/** The exact span of one draft block in a file, plus the record it parses to. */
+export interface DraftBlockLocation {
+	start: number;
+	end: number;
+	record: DraftRecord;
+}
+
+/**
+ * Locate one draft block by id, so the review queue (a later module) can
+ * replace exactly that block, in place, without touching anything else in
+ * the inbox file. Returns undefined when no block with that id exists,
+ * rather than throwing, since the caller (a human action on a draft that
+ * may have already been acted on elsewhere) is in a better position to
+ * decide what a missing draft means.
+ */
+export function findDraftBlock(fileContent: string, id: string): DraftBlockLocation | undefined {
+	const normalized = fileContent.replace(/\r\n/g, "\n");
+	const pattern = new RegExp(DRAFT_BLOCK_PATTERN);
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(normalized)) !== null) {
+		const headingId = match[1];
+		const attributes = parseAttributes(match[2]);
+		const recordId = attributes.id ?? headingId;
+		if (recordId !== id) continue;
+		return {
+			start: match.index,
+			end: match.index + match[0].length,
+			record: {
+				id: recordId,
+				captureId: attributes.capture ?? "",
+				status: (attributes.status as DraftStatus) ?? "draft",
+				promptVersion: attributes.promptVersion ?? "",
+				modelId: attributes.modelId ?? "",
+				lintFailures: deserializeLintFailures(attributes.lint ?? "none"),
+				cardText: match[3],
+				backExtra: match[4],
+			},
+		};
+	}
+	return undefined;
+}
+
+/**
+ * Replace one draft block, in place, with the serialized form of an updated
+ * record. This is the only way review actions change a draft's status or
+ * text: the block is found by id and swapped, so every other block in the
+ * file, and everything that is not a draft block, is left untouched. When
+ * the id does not resolve to a block, the content is returned unchanged
+ * rather than throwing, for the same reason findDraftBlock returns
+ * undefined instead of throwing.
+ */
+export function replaceDraftBlock(fileContent: string, id: string, updated: DraftRecord): string {
+	const normalized = fileContent.replace(/\r\n/g, "\n");
+	const location = findDraftBlock(normalized, id);
+	if (!location) return normalized;
+	const before = normalized.slice(0, location.start);
+	const after = normalized.slice(location.end);
+	return before + serializeDraft(updated) + after;
 }
