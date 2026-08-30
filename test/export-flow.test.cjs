@@ -255,6 +255,47 @@ test("a non-duplicate AnkiConnect error from addNote (for example, a malformed n
 	assert.equal(result.outcome, "unreachable");
 });
 
+// TCK-072: a raw-source capture (source under sources/) must export tagged
+// source::<file-slug>, not wiki::<page-slug>, and must never touch the raw
+// file itself. Before this ticket's fix, writeSeedBack ran unconditionally
+// and would have read the "PDF" as text and appended a Markdown seed
+// section into it, since capture.source pointed straight at the raw file.
+test("a raw-source draft exports tagged source::<file-slug> and never touches the file under sources/", async () => {
+	const inbox = buildInbox({
+		captureId: "cap-raw",
+		source: "sources/fphar-08-00438.pdf",
+		draftId: "draft-raw",
+		cardText: "The {{c1::vagus nerve}} carries {{c2::parasympathetic}} signals.",
+		backExtra: "Cranial nerve X.",
+	});
+	// Stands in for the real binary PDF: opaque content that would not
+	// survive being read as Markdown and re-written with a seed appended.
+	const rawFileContent = "%PDF-1.4 fixture bytes, not real PDF content, not to be touched";
+	const vault = makeVault([
+		["flashcard-inbox.md", inbox],
+		["sources/fphar-08-00438.pdf", rawFileContent],
+	]);
+	const app = { vault };
+
+	let addNoteBody;
+	global.fetch = fakeFetch((body) => {
+		if (body.action === "sync") return jsonOk(null);
+		if (body.action === "deckNames") return jsonOk(["All::2 Default::Wiki"]);
+		if (body.action === "findNotes") return jsonOk([]);
+		if (body.action === "addNote") {
+			addNoteBody = body.params.note;
+			return jsonOk(654);
+		}
+		throw new Error(`unexpected action ${body.action}`);
+	});
+
+	const result = await exportApprovedDraft(app, baseSettings(), "draft-raw");
+
+	assert.equal(result.outcome, "exported");
+	assert.deepEqual(addNoteBody.tags, ["source::fphar-08-00438"]);
+	assert.equal(vault.files.get("sources/fphar-08-00438.pdf"), rawFileContent, "the raw source file must be byte-identical after export");
+});
+
 test("a Basic card (no cloze markup) still exports cleanly through the same duplicate pre-check", async () => {
 	const inbox = buildInbox({
 		captureId: "cap-5",

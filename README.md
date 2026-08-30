@@ -114,6 +114,43 @@ given block cannot fill in honestly is left out entirely, not written as an
 empty string, so a downstream parser can tell the difference between "not
 yet drafted" and "drafted with no recorded model."
 
+### Raw-source captures, from a PDF under sources/
+
+A capture can also come from a PDF rather than a Markdown note, per
+decision 14 of the design note. This vault keeps raw material in
+`sources/` at the vault root and compiled digest pages in `wiki/sources/`,
+and a raw-source capture reads only the first. The block gains one more
+attribute, `page`, and `source` points at the file under `sources/`
+instead of a Markdown note:
+
+```
+## Capture 20260830T120000000-pdf01a
+
+- id: 20260830T120000000-pdf01a
+- status: captured
+- captured: 2026-08-30T12:00:00.000Z
+- source: sources/fphar-08-00438.pdf
+- page: 2
+- location: page 2
+
+> The exact quoted passage, taken from that page of the PDF.
+
+---
+
+```
+
+`page` is a 1-indexed page number and is required for a raw-source
+capture: provenance with no page number cannot reopen a passage in a
+40-page paper. It is absent entirely from a Markdown-note capture, the
+same way `modelId` and `promptVersion` are absent from a fresh one, so a
+downstream parser can tell the two capture kinds apart by whether `page`
+is present at all, rather than by a sentinel value. A capture whose
+`source` starts with `sources/` is a raw-source capture; everything else
+is a Markdown-note capture, unchanged from the format above.
+
+Extraction and manual and automatic highlight capture live in
+`pdf-source.ts`, described in "Raw-source capture (PDF highlight)" below.
+
 ## Drafting
 
 The "Draft pending captures" command reads the inbox, finds every capture
@@ -161,6 +198,12 @@ a capture. Capturing a new passage is refused, with a Notice explaining
 why, once more than 50 drafts are pending; the fix is clearing the queue,
 not raising the ceiling.
 
+A group whose capture has no digest page behind it (a raw-source capture,
+see "Raw-source capture" below) is marked plainly in the queue model
+(`noPageBehind` on the group) rather than left to blend in with a
+page-backed draft: such a card cannot be reformulated if it leeches, since
+there is no page for the backward direction to resolve its tag to.
+
 Three actions exist per draft, and no others:
 
 - **Approve.** One key ("a" on a focused draft row, or a button) sends the
@@ -183,13 +226,17 @@ approve and export are the same reviewer decision. Export, in order:
    written on a duplicate.
 2. `addNote`, to the deck named in Settings (`All::2 Default::Wiki` by
    default), using the existing `Cloze` model for a card with cloze markup
-   or `Basic` otherwise, tagged `wiki::<page-slug>`. No new note type is
-   ever created.
-3. The draft is marked `exported` in the inbox, and the seed is written
-   back to the source page: a bullet in that page's `## Flashcard Seeds`
-   section and an update to its `cards:` frontmatter (`deck`, `count`,
-   `note_ids`). A source page that does not exist is created first with a
-   minimal frontmatter, so a seed is never orphaned.
+   or `Basic` otherwise, tagged `wiki::<page-slug>` for a Markdown-note
+   capture or `source::<file-slug>` for a raw-source capture out of
+   `sources/`. No new note type is ever created.
+3. The draft is marked `exported` in the inbox. For a Markdown-note
+   capture, the seed is also written back to the source page: a bullet in
+   that page's `## Flashcard Seeds` section and an update to its `cards:`
+   frontmatter (`deck`, `count`, `note_ids`). A source page that does not
+   exist is created first with a minimal frontmatter, so a seed is never
+   orphaned. A raw-source capture skips this step: `sources/` is read-only,
+   so there is no page to write a seed to until a human promotes the card
+   by writing one, per "Raw-source capture" below.
 
 Anki being closed, or AnkiConnect being unreachable at all, is caught as
 one case: a Notice explains it, and the draft is left `approved`, pending
@@ -201,6 +248,51 @@ Every approve, edit-then-approve, and discard is appended, one line per
 entry, to the disposition log (`loopback-disposition-log.md` by default),
 with the prompt version, the model id, and a timestamp. This file is
 append-only and plain text, so the owner can open and read it directly.
+
+## Raw-source capture (PDF highlight)
+
+`pdf-source.ts` extends capture to a PDF under `sources/`, the vault's
+immutable raw collection, rather than only a Markdown note already open in
+the editor. This follows the Janus workflow the owner asked to keep
+(Upload, Generate, Review, Export) with one rule relaxed: a highlight in a
+PDF may become a card without a digest page in `wiki/sources/` existing
+first, per decision 14 of the design note. The grounding rule does not
+move: the atom has to be present in the passage it came from, verbatim
+enough to be checkable.
+
+- **Extraction.** `extractPdfPages(data)` reads a PDF's bytes and returns
+  its text, one entry per page, 1-indexed, using `pdf-parse` (the actively
+  maintained TypeScript rewrite, chosen because it already exposes
+  per-page text as its own result shape rather than requiring a custom
+  render callback). No file is read or written here beyond the bytes
+  handed in; extraction never touches `sources/` for anything but reading.
+- **Manual mode, first.** `buildRawSourceCapture({ sourcePath, page, quote })`
+  turns a human's selection, a file under `sources/`, a page, and a
+  passage, into the same kind of `Capture` object `captureSelection`
+  builds for a Markdown note. It is pure and synchronous: no model call,
+  no network call, no file I/O, which is why it works with no API key and
+  during an outage, the same reason capture itself makes no model call.
+  `buildGroundedRawSourceCapture` additionally checks the quote against a
+  page's extracted text and reports whether it was found, verbatim enough,
+  without blocking the capture when it was not (a PDF's text layer can
+  legitimately fail to match a hand-typed passage across a hyphenation
+  break or a column reflow).
+- **Automatic mode, second.** `proposeRawSourceCaptures(sourcePath, pages,
+  adapter, prompt)` asks a `HighlightAdapter`, given a document's pages and
+  an optional prompt, to propose spans across the whole document, then
+  keeps only the spans it can verify against the page they claim to come
+  from; everything else is returned as `rejected`, never silently dropped.
+  This is a separate, narrower interface than `DraftAdapter` in
+  `adapter.ts`: a proposed span is a passage to capture, not a candidate
+  card, and every capture it produces still goes through the same draft,
+  lint, and review path as anything else in the inbox, reaching Anki only
+  if a human approves the card drafted from it. No implementation of
+  `HighlightAdapter` ships in this repository; it is unit tested against a
+  fake adapter only, and no live model call has been made under it.
+- **Tagging.** A raw-source card is exported tagged `source::<file-slug>`
+  instead of `wiki::<page-slug>` (see "Review queue and export" above),
+  and export skips writing a seed back to a page, since `sources/` holds
+  no page to write to. Both tag kinds coexist across the collection.
 
 ## Settings
 
@@ -255,7 +347,18 @@ Bundles each module under test to CommonJS with esbuild and runs every
 - `capture-format.test.cjs`: the round-trip test for the capture block,
   a single capture, a multi-line quote with an internal blank line, two
   captures appended to the same file, and id uniqueness across repeated
-  calls.
+  calls. Also the raw-source extension: a capture with a `page` attribute
+  round-trips with it, a Markdown-note capture parses back with no `page`
+  key at all, and `isRawSourceCapture` tells the two kinds apart.
+- `pdf-source.test.cjs`: page-numbered extraction, the manual highlight
+  capture builder and its grounding check, and automatic mode against a
+  fake `HighlightAdapter`, all run in that order. Extraction and the
+  manual-mode tests read the real `fphar-08-00438.pdf` already sitting in
+  the vault's `sources/` folder, read-only, and the file's checksum and
+  byte length are re-verified unchanged after every test in the file has
+  run. No test in this file makes a network call; two stub `global.fetch`
+  to throw and show manual mode and automatic-mode orchestration still
+  work without it.
 - `keys.test.cjs`: key resolution order, and that no error path ever
   surfaces a key value. Every fixture is an obviously fake placeholder;
   none of these tests touches a real environment variable, a real
@@ -273,10 +376,14 @@ Bundles each module under test to CommonJS with esbuild and runs every
   plus their bulk forms.
 - `review-queue.test.cjs`: grouping drafts by the capture they came from,
   the 30-day stale split, orphan drafts, and the 50-pending-draft ceiling.
+  Also `noPageBehind`: a raw-source capture's group is flagged, a
+  Markdown-note capture's group is not.
 - `disposition-log.test.cjs`: the log line format round-trips, and
   appending never merges two entries onto the same line.
 - `anki-note.test.cjs`: Cloze versus Basic model detection, field names,
-  the `wiki::<page-slug>` tag, and the duplicate search query.
+  the `wiki::<page-slug>` tag, and the duplicate search query. Also
+  `buildSourceTags`'s `source::<file-slug>` tag, and that it and
+  `buildTags` never collide for the same slug.
 - `anki-client.test.cjs`: every AnkiConnect action, against an injected
   fake fetch, including the error and unreachable-network cases.
 - `seed-writeback.test.cjs`: appending a Flashcard Seeds bullet with and

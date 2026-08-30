@@ -13,6 +13,7 @@ const {
 	buildNoteFields,
 	derivePageSlug,
 	buildTags,
+	buildSourceTags,
 	buildDuplicateSearchQuery,
 } = require("../.test-build/anki-note.cjs");
 
@@ -47,6 +48,26 @@ test("derivePageSlug strips directories and the extension", () => {
 
 test("buildTags produces exactly one wiki::<page-slug> tag", () => {
 	assert.deepEqual(buildTags("minimum-information-principle"), ["wiki::minimum-information-principle"]);
+});
+
+// TCK-072: a raw-source card (no digest page yet) carries source::<file-slug>
+// instead of wiki::<page-slug>. derivePageSlug already works for a raw
+// source path (sources/fphar-08-00438.pdf strips to fphar-08-00438 the same
+// way a wiki path does), so only the tag prefix differs.
+test("buildSourceTags produces exactly one source::<file-slug> tag", () => {
+	assert.deepEqual(buildSourceTags("fphar-08-00438"), ["source::fphar-08-00438"]);
+});
+
+test("derivePageSlug works the same way on a raw-source path as on a wiki path", () => {
+	assert.equal(derivePageSlug("sources/fphar-08-00438.pdf"), "fphar-08-00438");
+	assert.equal(derivePageSlug("sources/clippings/2015.ecarnot-writing-scientific-article.pdf"), "2015.ecarnot-writing-scientific-article");
+});
+
+test("buildTags and buildSourceTags produce distinct, non-colliding tags for the same slug, so both can coexist across the collection", () => {
+	const slug = "fphar-08-00438";
+	assert.deepEqual(buildTags(slug), ["wiki::fphar-08-00438"]);
+	assert.deepEqual(buildSourceTags(slug), ["source::fphar-08-00438"]);
+	assert.notDeepEqual(buildTags(slug), buildSourceTags(slug));
 });
 
 test("buildDuplicateSearchQuery keeps the raw cloze markup, since that is what Anki's Text field actually stores", () => {

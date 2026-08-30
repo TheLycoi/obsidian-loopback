@@ -10,9 +10,13 @@ capture. Decision 5 of the design note sets both numbers here: drafts older
 than 30 days move to a stale section shown first, and a new capture is
 refused once more than 50 drafts are pending. Neither number expires a
 draft; both only change where or whether a new one can land.
+
+TCK-072 adds one more flag per group, noPageBehind, true when the group's
+capture is a raw-source capture with no digest page to trace back to. See
+NO_PAGE_BEHIND_NOTICE below for what that costs and how it is surfaced.
 */
 
-import { parseCaptures, type Capture } from "./capture-format";
+import { parseCaptures, isRawSourceCapture, type Capture } from "./capture-format";
 import { parseDrafts, type DraftRecord } from "./draft-format";
 
 /** A draft still waiting on a human: not yet approved, exported, or discarded. */
@@ -23,10 +27,25 @@ export const MAX_PENDING_DRAFTS = 50;
 
 const STALE_AGE_MS = STALE_DAYS * 24 * 60 * 60 * 1000;
 
+/**
+ * Shown beside a group whose capture has no digest page behind it: a
+ * raw-source capture, per decision 14 of the design note. Such a card
+ * cannot be reformulated when it leeches, since the backward direction
+ * resolves wiki::<page-slug> to a page and there is none, so the review
+ * queue has to make that cost visible rather than let the card blend in.
+ * The fix, when one of these keeps failing, is to promote it: write the
+ * digest page, re-derive the seed from the page, then retag. This ticket
+ * only surfaces the gap; it does not build that promotion path.
+ */
+export const NO_PAGE_BEHIND_NOTICE =
+	"No page behind this capture. It cannot be reformulated if it leeches; promote it by writing a digest page first.";
+
 export interface QueueGroup {
 	capture: Capture;
 	drafts: DraftRecord[];
 	stale: boolean;
+	/** True when capture has no digest page behind it: a raw-source capture from sources/, tagged source::<file-slug> rather than wiki::<page-slug> on export. */
+	noPageBehind: boolean;
 }
 
 export interface QueueModel {
@@ -82,7 +101,12 @@ export function buildQueue(fileContent: string, now: Date = new Date()): QueueMo
 	for (const capture of captures) {
 		const groupDrafts = draftsByCapture.get(capture.id);
 		if (!groupDrafts || groupDrafts.length === 0) continue;
-		const group: QueueGroup = { capture, drafts: groupDrafts, stale: isStale(capture, now) };
+		const group: QueueGroup = {
+			capture,
+			drafts: groupDrafts,
+			stale: isStale(capture, now),
+			noPageBehind: isRawSourceCapture(capture),
+		};
 		(group.stale ? staleGroups : freshGroups).push(group);
 	}
 

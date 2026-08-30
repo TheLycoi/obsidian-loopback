@@ -65,6 +65,21 @@ export function buildTags(pageSlug: string): string[] {
 }
 
 /**
+ * The tag a raw-source card carries instead of wiki::<page-slug>, per
+ * decision 14 of the design note and TCK-072: a card drafted straight from
+ * a PDF under sources/ has no digest page to trace back to, so it is tagged
+ * against the raw file itself. This makes the untraceable-card cost visible
+ * on the card rather than silent, and is also the tag the promotion path
+ * (writing the digest page, then retagging wiki::<page-slug>) looks for.
+ * Both this tag and buildTags's wiki:: tag can exist across the collection
+ * at once; a single card only ever carries one or the other, chosen by
+ * whether its capture's source sits under sources/.
+ */
+export function buildSourceTags(fileSlug: string): string[] {
+	return [`source::${fileSlug}`];
+}
+
+/**
  * A collection-wide search for the card's own text, exactly as Anki stores
  * it. The stored Cloze note keeps the raw "{{c1::atom}}" markup in its Text
  * field, so the search has to match that, not a stripped-down paraphrase:

@@ -9,7 +9,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { serializeCapture } = require("../.test-build/capture-format.cjs");
 const { serializeDraft } = require("../.test-build/draft-format.cjs");
-const { buildQueue, shouldRefuseCapture, MAX_PENDING_DRAFTS, STALE_DAYS } = require("../.test-build/review-queue.cjs");
+const { buildQueue, shouldRefuseCapture, MAX_PENDING_DRAFTS, STALE_DAYS, NO_PAGE_BEHIND_NOTICE } = require("../.test-build/review-queue.cjs");
 
 const NOW = new Date("2026-08-29T00:00:00.000Z");
 
@@ -95,4 +95,29 @@ test("shouldRefuseCapture is true once pending drafts exceed 50", () => {
 		serializeDraft(draft({ id: `draft-${index}`, captureId: "orphan-capture" }))
 	).join("");
 	assert.equal(shouldRefuseCapture(drafts, NOW), true);
+});
+
+// TCK-072: a group whose capture has no digest page behind it, a raw-source
+// capture out of sources/, must be marked so the review queue can say so
+// plainly rather than let it blend in with a page-backed draft.
+test("a group whose capture is a raw source is flagged noPageBehind, a page-backed group is not", () => {
+	const rawCapture = capture({
+		id: "capture-raw",
+		source: "sources/fphar-08-00438.pdf",
+		location: "page 3",
+		page: 3,
+	});
+	const fileContent =
+		serializeCapture(capture()) +
+		serializeDraft(draft()) +
+		serializeCapture(rawCapture) +
+		serializeDraft(draft({ id: "draft-raw", captureId: "capture-raw" }));
+	const queue = buildQueue(fileContent, NOW);
+
+	assert.equal(queue.freshGroups.length, 2);
+	const pageBacked = queue.freshGroups.find((group) => group.capture.id === "capture-a");
+	const rawSourced = queue.freshGroups.find((group) => group.capture.id === "capture-raw");
+	assert.equal(pageBacked.noPageBehind, false);
+	assert.equal(rawSourced.noPageBehind, true);
+	assert.ok(typeof NO_PAGE_BEHIND_NOTICE === "string" && NO_PAGE_BEHIND_NOTICE.length > 0);
 });

@@ -15,10 +15,15 @@ Order of operations, and why:
    and this check runs regardless of what Settings holds.
 3. Duplicate search across the whole collection, no deck qualifier. A hit
    blocks the write and the Notice says which note it matched.
-4. addNote, tagged wiki::<page-slug>.
+4. addNote, tagged wiki::<page-slug>, or source::<file-slug> for a
+   raw-source capture (TCK-072) whose source sits under sources/ with no
+   digest page behind it yet.
 5. Sync again.
-6. Mark the draft "exported" in the inbox, write the seed back to the
-   source page, and update that page's cards: frontmatter.
+6. Mark the draft "exported" in the inbox. For a page-backed capture, also
+   write the seed back to the source page and update its cards:
+   frontmatter. A raw-source capture skips this step entirely: sources/ is
+   read-only, so there is no page to write a seed to until a human promotes
+   the card by writing one.
 
 Anki being closed or AnkiConnect being unreachable is caught once, broadly,
 around steps 1 through 5: the draft is left exactly as it was ("approved"),
@@ -36,7 +41,7 @@ AnkiConnect, still reports "unreachable."
 */
 
 import { type App, Notice, TFile, normalizePath } from "obsidian";
-import { parseCaptures } from "./capture-format";
+import { isRawSourceCapture, parseCaptures } from "./capture-format";
 import { findDraftBlock, replaceDraftBlock, type DraftRecord } from "./draft-format";
 import {
 	AnkiConnectError,
@@ -46,7 +51,7 @@ import {
 	getNotesInfo,
 	syncCollection,
 } from "./anki-client";
-import { buildDuplicateSearchQuery, buildNoteFields, buildTags, derivePageSlug, detectModelName } from "./anki-note";
+import { buildDuplicateSearchQuery, buildNoteFields, buildSourceTags, buildTags, derivePageSlug, detectModelName } from "./anki-note";
 import { appendFlashcardSeed, buildMinimalSourcePage, updateCardsFrontmatter } from "./seed-writeback";
 import type { LoopbackSettings } from "./settings";
 
@@ -163,8 +168,19 @@ export async function exportApprovedDraft(app: App, settings: LoopbackSettings, 
 
 		const modelName = detectModelName(location.record.cardText);
 		const fields = buildNoteFields(location.record, modelName);
-		const pageSlug = derivePageSlug(capture.source);
-		const tags = buildTags(pageSlug);
+		const fileSlug = derivePageSlug(capture.source);
+		// TCK-072: a raw-source capture (sources/..., no digest page written
+		// yet) carries source::<file-slug> instead of wiki::<page-slug>, and
+		// skips writeSeedBack entirely. writeSeedBack treats capture.source as
+		// a Markdown page to read and append a seed bullet to; sources/ holds
+		// binary PDFs, so running it against a raw-source capture would read a
+		// PDF as text and write Markdown back into it, corrupting the one
+		// collection decision 14 requires stay read-only. Promoting a
+		// raw-source card to a page-backed one is a human decision (write the
+		// digest page, re-derive the seed, retag), not something export does
+		// on its own.
+		const rawSource = isRawSourceCapture(capture);
+		const tags = rawSource ? buildSourceTags(fileSlug) : buildTags(fileSlug);
 
 		const noteId = await addNote(url, { deckName, modelName, fields, tags });
 		await trySync(url);
@@ -173,7 +189,9 @@ export async function exportApprovedDraft(app: App, settings: LoopbackSettings, 
 		const updatedInbox = replaceDraftBlock(inboxContent, draftId, exportedRecord);
 		await app.vault.modify(inboxFile, updatedInbox);
 
-		await writeSeedBack(app, capture.source, location.record, deckName, noteId);
+		if (!rawSource) {
+			await writeSeedBack(app, capture.source, location.record, deckName, noteId);
+		}
 
 		new Notice(`Loopback: exported to Anki (${deckName}, note ${noteId}).`);
 		return { outcome: "exported", message: `Loopback: exported draft ${draftId} to Anki as note ${noteId}.` };
