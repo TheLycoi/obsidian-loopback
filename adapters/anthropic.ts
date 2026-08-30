@@ -8,6 +8,7 @@ import type { Draft, DraftAdapter, DraftContext } from "../adapter";
 import { getPromptText } from "../prompt-registry";
 import { resolveApiKey, type ApiKeySource } from "../keys";
 import { parseModelOutput } from "../draft-parsing";
+import { DraftingAdapterError } from "./adapter-error";
 
 export interface AnthropicAdapterOptions {
 	modelId: string;
@@ -66,9 +67,12 @@ export class AnthropicAdapter implements DraftAdapter {
 		});
 
 		if (!response.ok) {
-			// The status code is safe to report. The response body is not: it can
-			// echo request content back, so it never appears in this message.
-			throw new Error(`Anthropic drafting call failed with status ${response.status}`);
+			// The provider's own message is worth surfacing, a usage cap and a
+			// bad model id both answer with status 400 and nothing else tells
+			// them apart. The body can echo request content back, so the
+			// resolved key is redacted out of it before it reaches this message.
+			const bodyText = await response.text().catch(() => "");
+			throw new DraftingAdapterError("Anthropic", response.status, bodyText, [apiKey]);
 		}
 
 		const data = (await response.json()) as AnthropicResponse;

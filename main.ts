@@ -11,7 +11,8 @@ model call or a closed instance of Anki can never add latency to capture.
 */
 
 import { Editor, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
-import { Capture, generateCaptureId, serializeCapture } from "./capture-format";
+import { serializeCapture } from "./capture-format";
+import { buildCaptureRecord } from "./capture-decision";
 import { DEFAULT_SETTINGS, LoopbackSettings, LoopbackSettingTab } from "./settings";
 import { runDraftingCommand } from "./drafting-command";
 import type { DraftAdapter } from "./adapter";
@@ -20,8 +21,6 @@ import { OpenAiCompatibleAdapter } from "./adapters/openai-compatible";
 import { MAX_PENDING_DRAFTS } from "./review-queue";
 import { shouldRefuseCapture } from "./review-orchestrator";
 import { ReviewQueueView, VIEW_TYPE_REVIEW_QUEUE } from "./review-view";
-
-const HEADING_PATTERN = /^#{1,6}\s+.+/;
 
 /** Build the adapter the current settings point at. Drafting only, never called from captureSelection. */
 function buildDraftAdapter(settings: LoopbackSettings): DraftAdapter {
@@ -128,31 +127,16 @@ export default class LoopbackPlugin extends Plugin {
 		}
 
 		const sourcePath = view.file ? view.file.path : "unknown";
-		const location = this.resolveLocation(editor);
-
-		const capture: Capture = {
-			id: generateCaptureId(),
-			status: "captured",
-			captured: new Date().toISOString(),
-			source: sourcePath,
-			location,
-			quote: selection,
-		};
-
-		await this.appendToInbox(serializeCapture(capture));
-		new Notice(`Loopback: capture saved to ${this.settings.inboxPath}`);
-	}
-
-	/** The nearest heading above the selection, text only, or a 1-indexed line number when there is none. */
-	resolveLocation(editor: Editor): string {
-		const from = editor.getCursor("from");
-		for (let line = from.line; line >= 0; line--) {
-			const text = editor.getLine(line);
-			if (HEADING_PATTERN.test(text)) {
-				return text.replace(/^#{1,6}\s+/, "");
-			}
+		const cursorLine = editor.getCursor("from").line;
+		const lines: string[] = [];
+		for (let line = 0; line <= cursorLine; line++) {
+			lines.push(editor.getLine(line));
 		}
-		return `line ${from.line + 1}`;
+
+		const record = buildCaptureRecord({ selectionText: selection, sourcePath, lines, cursorLine });
+
+		await this.appendToInbox(serializeCapture(record));
+		new Notice(`Loopback: capture saved to ${this.settings.inboxPath}`);
 	}
 
 	/** Create the inbox file on first capture, otherwise append. Vault I/O only, no network. */
