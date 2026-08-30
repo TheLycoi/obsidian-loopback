@@ -16,8 +16,22 @@ export type AnkiModelName = "Cloze" | "Basic";
 
 const CLOZE_PATTERN = /\{\{c\d+::.*?\}\}/;
 
-function stripClozeMarkup(cardText: string): string {
-	return cardText.replace(/\{\{c\d+::(.*?)\}\}/g, "$1");
+/**
+ * Escape a string so an Anki search treats it as literal text, not as
+ * search syntax. Anki's search parser splits on an unescaped colon to find
+ * a field:value pair, and treats an unescaped asterisk or underscore as a
+ * wildcard, in both cases even when the surrounding text is quoted. A raw
+ * cloze card carries "{{c1::atom}}", two literal colons, so without this
+ * escaping a quoted phrase search for the card's own text never matches
+ * the note that holds it.
+ */
+function escapeForAnkiSearch(text: string): string {
+	return text
+		.replace(/\\/g, "\\\\")
+		.replace(/:/g, "\\:")
+		.replace(/\*/g, "\\*")
+		.replace(/_/g, "\\_")
+		.replace(/"/g, '\\"');
 }
 
 /**
@@ -51,13 +65,16 @@ export function buildTags(pageSlug: string): string[] {
 }
 
 /**
- * A collection-wide search for the card's own text, cloze markup stripped
- * so a near-identical card using a different clozed word still surfaces.
- * No deck: qualifier, since decision 2 and the ticket both require the
- * duplicate search to cover the whole collection, not just the target deck.
+ * A collection-wide search for the card's own text, exactly as Anki stores
+ * it. The stored Cloze note keeps the raw "{{c1::atom}}" markup in its Text
+ * field, so the search has to match that, not a stripped-down paraphrase:
+ * an earlier version of this function stripped the markup before
+ * searching, which meant the search looked for text no stored note ever
+ * contains, and a byte-identical duplicate was never found. No deck:
+ * qualifier, since decision 2 and the ticket both require the duplicate
+ * search to cover the whole collection, not just the target deck.
  */
 export function buildDuplicateSearchQuery(cardText: string): string {
-	const plain = stripClozeMarkup(cardText).trim();
-	const escaped = plain.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+	const escaped = escapeForAnkiSearch(cardText.trim());
 	return `"${escaped}"`;
 }

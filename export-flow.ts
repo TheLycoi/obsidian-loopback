@@ -25,6 +25,14 @@ around steps 1 through 5: the draft is left exactly as it was ("approved"),
 a Notice explains why, and nothing here retries on its own. A human runs
 the export action again later, which is what requirement 9 asks for:
 lost nothing, no silent retry loop.
+
+That one catch block first checks whether the AnkiConnectError is Anki's
+own duplicate rejection rather than a real connection failure (TCK-070):
+step 3's pre-check is expected to catch every real duplicate before addNote
+ever runs, but if one still slips through, addNote itself rejects it, and
+that rejection is reported as "duplicate," not "unreachable." Everything
+else that reaches this catch block, a closed Anki, a wrong port, a stopped
+AnkiConnect, still reports "unreachable."
 */
 
 import { type App, Notice, TFile, normalizePath } from "obsidian";
@@ -72,6 +80,30 @@ async function describeDuplicate(url: string, noteIds: number[]): Promise<string
 	} catch {
 		return `note id ${noteIds[0]}`;
 	}
+}
+
+/**
+ * True when an AnkiConnectError's message is AnkiConnect's own duplicate
+ * rejection, "cannot create note because it is a duplicate" (confirmed
+ * live against AnkiConnect 6, 2026-08-29), rather than a connection
+ * failure. The duplicate pre-check above is expected to catch every real
+ * duplicate before addNote ever runs, so this only fires if a duplicate
+ * still slips past that search, and it exists so that case is reported
+ * honestly instead of as "Anki is unreachable."
+ */
+function isDuplicateRejection(error: AnkiConnectError): boolean {
+	return /duplicate/i.test(error.message);
+}
+
+/** Re-runs the duplicate search after addNote itself reports a duplicate, best effort, so the outcome names what it matched instead of just "a duplicate." */
+async function describeDuplicateAfterRejection(url: string, cardText: string): Promise<string> {
+	try {
+		const matches = await findNotes(url, buildDuplicateSearchQuery(cardText));
+		if (matches.length > 0) return await describeDuplicate(url, matches);
+	} catch {
+		// best effort only, addNote already told us it was a duplicate
+	}
+	return "an existing note";
 }
 
 /**
@@ -147,6 +179,15 @@ export async function exportApprovedDraft(app: App, settings: LoopbackSettings, 
 		return { outcome: "exported", message: `Loopback: exported draft ${draftId} to Anki as note ${noteId}.` };
 	} catch (error) {
 		if (error instanceof AnkiConnectError) {
+			if (isDuplicateRejection(error)) {
+				// The pre-check above missed this one; ask Anki again with the
+				// same corrected query so the reviewer still learns what it
+				// matched, rather than being told the note simply failed.
+				const description = await describeDuplicateAfterRejection(url, location.record.cardText);
+				const message = `Loopback: export blocked, Anki rejected this note as a duplicate of ${description}.`;
+				new Notice(message);
+				return { outcome: "duplicate", message };
+			}
 			const message = `Loopback: Anki is unreachable (${error.message}). "${draftId}" stays approved and can be exported again once Anki is open.`;
 			new Notice(message);
 			return { outcome: "unreachable", message };
