@@ -3,7 +3,7 @@
   "name": "Loopback",
   "version": "0.1.0",
   "minAppVersion": "1.4.0",
-  "description": "Capture a passage and its source into a flashcard inbox. No network call, no model, no Anki write. Capture is the part that has to work when everything else is broken.",
+  "description": "Capture a passage from a note or a PDF, draft flashcards with your own LLM key, review them against the twenty rules, and export approved cards to Anki. Nothing reaches Anki without you approving it.",
   "author": "Conrad Kelonu",
   "authorUrl": "",
   "isDesktopOnly": false
