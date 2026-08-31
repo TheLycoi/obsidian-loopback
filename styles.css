@@ -81,3 +81,18 @@ fit on screen at once, with no wasted vertical space between them.
 	min-height: 2.5em;
 	margin-bottom: 0.2em;
 }
+
+.loopback-no-page-behind {
+	color: var(--text-error);
+	font-size: 0.85em;
+	margin: 0.15em 0 0.35em 0;
+}
+
+.loopback-pdf-quote {
+	width: 100%;
+}
+
+.loopback-pdf-highlight-notice {
+	color: var(--text-muted);
+	font-size: 0.85em;
+}

@@ -1,5 +1,5 @@
 /*
-Loopback: the plugin shell. Wires three commands to the modules that do the
+Loopback: the plugin shell. Wires the commands to the modules that do the
 actual work, and wires the review queue view.
 
 Capture selection is the forward path's first step and the only piece that
@@ -8,6 +8,21 @@ selection, attaches provenance, and appends a Markdown block to the inbox
 file, with no network call and no model. Draft pending captures and open
 review queue both build on top of it, on their own commands, so a slow
 model call or a closed instance of Anki can never add latency to capture.
+
+The two PDF commands (TCK-073) are imported dynamically, inside their own
+callbacks, rather than at the top of this file with everything else. That
+is not a style choice: pdf-capture-command.ts pulls in pdf-source.ts, which
+pulls in pdf-parse, whose browser build touches DOMMatrix and friends at
+module load time, not lazily on first use. A static import here would mean
+every single Obsidian startup, for every vault this plugin is ever
+installed in, runs that code before anyone has touched a PDF, so a gap in
+the browser environment pdf-parse assumes exists would fail the whole
+plugin, capture and drafting and the review queue included, rather than
+just the PDF command someone actually invoked. A dynamic import defers that
+entire dependency graph to the moment "Capture from PDF" or "Automatic
+highlight" is actually run, which is exactly the same reasoning that keeps
+drafting off the capture path: a fragile or slow dependency earns its own
+command, never a place in what has to work when everything else is broken.
 */
 
 import { Editor, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
@@ -18,6 +33,8 @@ import { runDraftingCommand } from "./drafting-command";
 import type { DraftAdapter } from "./adapter";
 import { AnthropicAdapter } from "./adapters/anthropic";
 import { OpenAiCompatibleAdapter } from "./adapters/openai-compatible";
+import { AnthropicHighlightAdapter } from "./adapters/anthropic-highlight";
+import type { HighlightAdapter } from "./pdf-source";
 import { MAX_PENDING_DRAFTS } from "./review-queue";
 import { shouldRefuseCapture } from "./review-orchestrator";
 import { ReviewQueueView, VIEW_TYPE_REVIEW_QUEUE } from "./review-view";
@@ -38,6 +55,24 @@ function buildDraftAdapter(settings: LoopbackSettings): DraftAdapter {
 	return new OpenAiCompatibleAdapter({
 		modelId: settings.modelId,
 		baseUrl: settings.openAiBaseUrl,
+		apiKeySource: settings.apiKeySource,
+		envVarName: settings.envVarName,
+		vaultKey,
+	});
+}
+
+/**
+ * Build the adapter automatic highlight mode calls through. Anthropic only,
+ * regardless of the drafting provider setting: the design note's decision
+ * 14 and the account this project runs under are both Anthropic-specific,
+ * and HighlightAdapter has no OpenAI-compatible implementation to switch to
+ * yet. Never called from captureSelection or from manual PDF capture,
+ * neither of which makes a model call.
+ */
+function buildHighlightAdapter(settings: LoopbackSettings): HighlightAdapter {
+	const vaultKey = settings.apiKeySource === "vault" ? settings.vaultApiKey : undefined;
+	return new AnthropicHighlightAdapter({
+		modelId: settings.modelId,
 		apiKeySource: settings.apiKeySource,
 		envVarName: settings.envVarName,
 		vaultKey,
@@ -76,6 +111,41 @@ export default class LoopbackPlugin extends Plugin {
 			name: "Open review queue",
 			callback: () => {
 				void this.openReviewQueue();
+			},
+		});
+
+		this.addCommand({
+			id: "capture-from-pdf",
+			name: "Capture from PDF",
+			callback: () => {
+				void (async () => {
+					try {
+						const { runPdfCaptureCommand } = await import("./pdf-capture-command");
+						await runPdfCaptureCommand(this.app, this.settings);
+					} catch (error) {
+						// A failure loading or running the PDF path is reported here and
+						// only here: capture-selection, drafting, and the review queue
+						// never went through this import and are unaffected either way.
+						const message = error instanceof Error ? error.message : "unknown error";
+						new Notice(`Loopback: PDF capture failed (${message}).`);
+					}
+				})();
+			},
+		});
+
+		this.addCommand({
+			id: "automatic-highlight-pdf",
+			name: "Automatic highlight (PDF)",
+			callback: () => {
+				void (async () => {
+					try {
+						const { runAutomaticHighlightCommand } = await import("./pdf-capture-command");
+						await runAutomaticHighlightCommand(this.app, this.settings, buildHighlightAdapter(this.settings));
+					} catch (error) {
+						const message = error instanceof Error ? error.message : "unknown error";
+						new Notice(`Loopback: automatic highlight failed (${message}).`);
+					}
+				})();
 			},
 		});
 

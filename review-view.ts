@@ -25,7 +25,7 @@ import {
 	performDiscard,
 	performEditAndApprove,
 } from "./review-orchestrator";
-import { STALE_DAYS, type QueueGroup } from "./review-queue";
+import { NO_PAGE_BEHIND_NOTICE, STALE_DAYS, type QueueGroup } from "./review-queue";
 import type LoopbackPlugin from "./main";
 
 export const VIEW_TYPE_REVIEW_QUEUE = "loopback-review-queue";
@@ -102,6 +102,13 @@ export class ReviewQueueView extends ItemView {
 			text: `${group.capture.source} - ${group.capture.location}`,
 		});
 		passageEl.createEl("blockquote", { text: group.capture.quote });
+		// TCK-072 flagged noPageBehind on the queue model; TCK-073 is what
+		// actually renders it, since a reviewer cannot act on a flag they
+		// cannot see. A raw-source capture group gets this notice instead of
+		// blending in with a page-backed one.
+		if (group.noPageBehind) {
+			passageEl.createDiv({ cls: "loopback-no-page-behind", text: NO_PAGE_BEHIND_NOTICE });
+		}
 		for (const draft of group.drafts) this.renderDraftRow(groupEl, draft);
 	}
 

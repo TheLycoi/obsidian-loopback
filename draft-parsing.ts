@@ -9,7 +9,8 @@ export interface ParsedCard {
 	backExtra: string;
 }
 
-function stripCodeFence(text: string): string {
+/** Exported so highlight-parsing.ts, which parses the same "JSON array, no fence" shape for a different prompt, does not reimplement it. */
+export function stripCodeFence(text: string): string {
 	const trimmed = text.trim();
 	const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
 	return fenced ? fenced[1] : trimmed;

@@ -74,19 +74,31 @@ export function extractProviderMessage(bodyText: string): string {
 }
 
 /**
- * A failed drafting call, carrying the HTTP status and the provider's own
- * message, redacted of anything key-shaped. A usage-cap 400 and a
- * bad-model-id 400 now read differently, because the provider's own words
- * survive into this message instead of being thrown away in favor of the
- * status code alone.
+ * A failed drafting or highlight call, carrying the HTTP status and the
+ * provider's own message, redacted of anything key-shaped. A usage-cap 400
+ * and a bad-model-id 400 now read differently, because the provider's own
+ * words survive into this message instead of being thrown away in favor of
+ * the status code alone.
  */
 export class DraftingAdapterError extends Error {
 	readonly status: number;
 
-	constructor(providerLabel: string, status: number, bodyText: string, knownSecrets: readonly string[] = []) {
+	/**
+	 * action names what the call was trying to do, "drafting" by default.
+	 * AnthropicHighlightAdapter passes "highlight" so a rejected automatic
+	 * highlight call reads as what it is rather than borrowing drafting's
+	 * wording for an unrelated call.
+	 */
+	constructor(
+		providerLabel: string,
+		status: number,
+		bodyText: string,
+		knownSecrets: readonly string[] = [],
+		action: string = "drafting"
+	) {
 		const rawMessage = extractProviderMessage(bodyText);
 		const safeMessage = redactKeyMaterial(rawMessage, knownSecrets);
-		super(`${providerLabel} drafting call failed with status ${status}: ${safeMessage}`);
+		super(`${providerLabel} ${action} call failed with status ${status}: ${safeMessage}`);
 		this.name = "DraftingAdapterError";
 		this.status = status;
 	}
