@@ -9,7 +9,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { serializeCapture } = require("../.test-build/capture-format.cjs");
 const { serializeDraft } = require("../.test-build/draft-format.cjs");
-const { buildQueue, shouldRefuseCapture, MAX_PENDING_DRAFTS, STALE_DAYS, NO_PAGE_BEHIND_NOTICE } = require("../.test-build/review-queue.cjs");
+const { buildQueue, shouldRefuseCapture, MAX_PENDING_DRAFTS, STALE_DAYS, NO_PAGE_BEHIND_NOTICE, chooseReviewPanelTarget } = require("../.test-build/review-queue.cjs");
 
 const NOW = new Date("2026-08-29T00:00:00.000Z");
 
@@ -166,4 +166,31 @@ test("a group whose capture is a raw source is flagged noPageBehind, a page-back
 	assert.equal(pageBacked.noPageBehind, false);
 	assert.equal(rawSourced.noPageBehind, true);
 	assert.ok(typeof NO_PAGE_BEHIND_NOTICE === "string" && NO_PAGE_BEHIND_NOTICE.length > 0);
+});
+
+/*
+TCK-079. The ribbon icon's one behavioral rule, proven without a workspace:
+clicking it while the review panel is already open must focus the panel
+that exists rather than open a second one. This is the behavior most likely
+to regress, because the obvious implementation of a ribbon handler is to
+create a leaf every time it is clicked.
+*/
+
+test("an existing review panel is reused, so a second click never opens a second copy", () => {
+	assert.deepEqual(chooseReviewPanelTarget(1, "right"), { kind: "existing" });
+	assert.deepEqual(chooseReviewPanelTarget(1, "left"), { kind: "existing" });
+	// More than one already open (a state a previous bug could have left
+	// behind) still reuses rather than adding a third.
+	assert.deepEqual(chooseReviewPanelTarget(2, "right"), { kind: "existing" });
+});
+
+test("an existing panel wins over the configured side, so a dragged panel is never yanked back", () => {
+	// The reviewer dragged the panel to the left while the setting still says
+	// right. Reusing it must not consult the side at all.
+	assert.deepEqual(chooseReviewPanelTarget(1, "right"), { kind: "existing" });
+});
+
+test("with no panel open the configured side decides where one is created", () => {
+	assert.deepEqual(chooseReviewPanelTarget(0, "right"), { kind: "create", side: "right" });
+	assert.deepEqual(chooseReviewPanelTarget(0, "left"), { kind: "create", side: "left" });
 });

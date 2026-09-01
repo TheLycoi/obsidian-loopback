@@ -48,7 +48,7 @@ import { AnthropicAdapter } from "./adapters/anthropic";
 import { OpenAiCompatibleAdapter } from "./adapters/openai-compatible";
 import { AnthropicHighlightAdapter } from "./adapters/anthropic-highlight";
 import type { HighlightAdapter } from "./pdf-source";
-import { MAX_PENDING_DRAFTS } from "./review-queue";
+import { MAX_PENDING_DRAFTS, chooseReviewPanelTarget } from "./review-queue";
 import { shouldRefuseCapture } from "./review-orchestrator";
 import { ReviewQueueView, VIEW_TYPE_REVIEW_QUEUE } from "./review-view";
 
@@ -99,6 +99,28 @@ export default class LoopbackPlugin extends Plugin {
 		await this.loadSettings();
 
 		this.registerView(VIEW_TYPE_REVIEW_QUEUE, (leaf) => new ReviewQueueView(leaf, this));
+
+		// The only way into the review queue that does not require knowing a
+		// command exists. Every other panel in this vault opens from the ribbon,
+		// so a queue reachable solely from the command palette reads as missing
+		// rather than as hidden, which is exactly how it was reported: the
+		// commands were listed, the settings tab was there, and the panel had
+		// still never been opened once.
+		//
+		// It calls openReviewQueue and does nothing else, so leaf reuse and side
+		// selection stay defined in exactly one place. Clicking this while the
+		// panel is already open focuses the panel where it sits; it never opens
+		// a second copy.
+		//
+		// The icon id is verified rather than assumed. "rotate-ccw" has its path
+		// data in Obsidian's own bundled lucide registry inside obsidian.asar.
+		// An id Obsidian does not know renders a blank but still clickable
+		// ribbon slot, which would reproduce the same invisible-door problem in
+		// a new form. It is also the return arrow, which is the direction the
+		// plugin is named for.
+		this.addRibbonIcon("rotate-ccw", "Open Loopback review queue", () => {
+			void this.openReviewQueue();
+		});
 
 		this.addCommand({
 			id: "capture-selection",
@@ -197,12 +219,15 @@ export default class LoopbackPlugin extends Plugin {
 	 */
 	async openReviewQueue(): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW_QUEUE);
+		// The choice itself is a pure function so it can be tested without a
+		// workspace; this method stays the thin glue that carries it out.
+		const target = chooseReviewPanelTarget(existing.length, this.settings.reviewSidebarSide);
 		let leaf: WorkspaceLeaf;
-		if (existing.length > 0) {
+		if (target.kind === "existing") {
 			leaf = existing[0];
 		} else {
 			const sideLeaf =
-				this.settings.reviewSidebarSide === "left"
+				target.side === "left"
 					? this.app.workspace.getLeftLeaf(false)
 					: this.app.workspace.getRightLeaf(false);
 			leaf = sideLeaf ?? this.app.workspace.getLeaf(true);

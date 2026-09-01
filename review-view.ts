@@ -124,6 +124,26 @@ export class ReviewQueueView extends ItemView {
 			queue.pendingCount > 0 || queue.staleGroups.length > 0 || queue.freshGroups.length > 0 || queue.orphanDrafts.length > 0;
 		if (!hasAnything) {
 			container.createEl("p", { text: "Nothing pending review." });
+			// An empty queue is the first thing a new reviewer ever sees, and
+			// on a vault with no inbox file yet it is the only thing they can
+			// see. Saying only that nothing is pending is true but useless: it
+			// does not distinguish a working panel with no work in it from a
+			// broken one, and it does not say what to do next. Naming the two
+			// capture commands does both.
+			//
+			// No capture button here on purpose. Capture reads the current
+			// editor selection, and a button in a sidebar has no selection to
+			// read, so it could only ever fail or capture the wrong thing.
+			container.createEl("p", {
+				cls: "loopback-empty-help",
+				text:
+					"To fill it: select a passage in a note, then run Capture and draft selection (Cmd or Ctrl, Shift, Enter). That saves the passage and drafts cards from it here.",
+			});
+			container.createEl("p", {
+				cls: "loopback-empty-help",
+				text:
+					"Capture selection (Cmd or Ctrl, Shift, L) saves a passage without drafting, for when you are capturing during a lecture and want to draft later.",
+			});
 			return;
 		}
 

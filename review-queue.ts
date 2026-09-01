@@ -155,3 +155,31 @@ export function buildQueue(fileContent: string, now: Date = new Date()): QueueMo
 export function shouldRefuseCapture(fileContent: string, now: Date = new Date()): boolean {
 	return buildQueue(fileContent, now).pendingCount > MAX_PENDING_DRAFTS;
 }
+
+/**
+ * Where the review panel should be opened, decided from the number of view
+ * leaves that already exist and the configured side. Pure, so the rule that
+ * matters most about the ribbon icon (TCK-079) can be proven without an
+ * Obsidian workspace: clicking it while the panel is already open must
+ * focus the panel that exists, never create a second one.
+ *
+ * TCK-076 settled the behavior this encodes and it does not change here. An
+ * existing leaf wins outright and is revealed wherever the reviewer has
+ * dragged it, because Obsidian persists that drag and resetting it on every
+ * click would fight the reviewer. The configured side is consulted only in
+ * the one case where there is no placement to respect yet, which is when a
+ * leaf has to be created.
+ *
+ * Placement note, and it is a compromise rather than a design choice: this
+ * belongs in its own module next to the view, not in the queue model. It
+ * lives here because the test build is a single explicit esbuild command
+ * per module in package.json, and package.json currently carries another
+ * ticket's uncommitted work that this ticket must not touch. Move it out
+ * when package.json is free.
+ */
+export type ReviewPanelTarget = { kind: "existing" } | { kind: "create"; side: "left" | "right" };
+
+export function chooseReviewPanelTarget(existingLeafCount: number, side: "left" | "right"): ReviewPanelTarget {
+	if (existingLeafCount > 0) return { kind: "existing" };
+	return { kind: "create", side };
+}
