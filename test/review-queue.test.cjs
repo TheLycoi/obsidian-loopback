@@ -97,6 +97,52 @@ test("shouldRefuseCapture is true once pending drafts exceed 50", () => {
 	assert.equal(shouldRefuseCapture(drafts, NOW), true);
 });
 
+// TCK-076: a capture that has never had a draft, pending or otherwise, is
+// the "just landed, drafting in flight" state the one-motion
+// capture-and-draft path produces. It must show up as its own group with an
+// empty drafts array and awaitingDraft true, not be silently absent the way
+// it was before this ticket, and not be confused with a capture whose
+// drafts already all resolved.
+test("a capture with no draft yet forms a pending group flagged awaitingDraft, not an absent one", () => {
+	const fileContent = serializeCapture(capture());
+	const queue = buildQueue(fileContent, NOW);
+
+	assert.equal(queue.freshGroups.length, 1);
+	assert.equal(queue.staleGroups.length, 0);
+	assert.equal(queue.freshGroups[0].capture.id, "capture-a");
+	assert.deepEqual(queue.freshGroups[0].drafts, []);
+	assert.equal(queue.freshGroups[0].awaitingDraft, true);
+	// A capture awaiting its first draft has no pending draft to count yet.
+	assert.equal(queue.pendingCount, 0);
+});
+
+test("awaitingDraft is false once a capture has a real pending draft", () => {
+	const fileContent = serializeCapture(capture()) + serializeDraft(draft());
+	const queue = buildQueue(fileContent, NOW);
+
+	assert.equal(queue.freshGroups[0].awaitingDraft, false);
+});
+
+test("a capture whose drafts are all resolved stays absent, distinct from one that never drafted", () => {
+	const fileContent = serializeCapture(capture()) + serializeDraft(draft({ status: "approved" }));
+	const queue = buildQueue(fileContent, NOW);
+
+	assert.equal(queue.freshGroups.length, 0);
+	assert.equal(queue.staleGroups.length, 0);
+});
+
+test("fresh groups list newest capture first, so it is reachable without scrolling past older ones", () => {
+	const older = capture({ id: "capture-older", captured: "2026-08-27T00:00:00.000Z" });
+	const newer = capture({ id: "capture-newer", captured: "2026-08-28T12:00:00.000Z" });
+	// File order is capture order: older written first, newer appended after.
+	const fileContent = serializeCapture(older) + serializeCapture(newer);
+	const queue = buildQueue(fileContent, NOW);
+
+	assert.equal(queue.freshGroups.length, 2);
+	assert.equal(queue.freshGroups[0].capture.id, "capture-newer");
+	assert.equal(queue.freshGroups[1].capture.id, "capture-older");
+});
+
 // TCK-072: a group whose capture has no digest page behind it, a raw-source
 // capture out of sources/, must be marked so the review queue can say so
 // plainly rather than let it blend in with a page-backed draft.

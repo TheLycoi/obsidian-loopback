@@ -13,9 +13,31 @@ checked. The 10-second-per-draft target from decision 6 is a layout goal,
 not something this file measures: the row shows the card, the Back Extra,
 any lint flag, and the source passage together, and nothing here forces a
 click just to see one of them.
+
+TCK-076 adds two things, both about closing the gap between a highlight and
+a reviewable card. First, a group whose capture has not been drafted yet
+(review-queue.ts flags this awaitingDraft) renders a pending line instead of
+either an empty group or nothing at all: the reviewer sees the passage land
+before any card exists. Second, this view no longer only refreshes itself
+when the reviewer runs a command; it listens for the inbox file changing
+underneath it, on "create" for the very first capture ever and "modify" for
+every one after, and re-renders on its own. That listener does not care
+which side of the workspace it lives on: everything here reads from
+this.plugin.settings and this.app, never from leaf placement, so the same
+behavior holds whether the leaf sits in the left sidebar, the right, or
+wherever the reviewer has since dragged it.
+
+A drafting failure is never persisted to the inbox file (the capture and
+draft block formats are locked and this ticket does not touch them), so
+draftErrors below is this view's own in-memory record of the most recent
+failure per capture id, reported by the plugin after a drafting pass. It is
+lost on reload, same as any other purely in-session UI state, but reachable
+the whole time the failure is still relevant: until a later drafting pass
+succeeds for that capture, at which point the group renders real drafts and
+the stored error is cleared as stale.
 */
 
-import { ItemView, Notice, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, normalizePath, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import type { DraftRecord } from "./draft-format";
 import {
 	loadQueue,
@@ -33,6 +55,8 @@ export const VIEW_TYPE_REVIEW_QUEUE = "loopback-review-queue";
 export class ReviewQueueView extends ItemView {
 	private readonly plugin: LoopbackPlugin;
 	private readonly selected: Set<string> = new Set();
+	/** Most recent drafting failure per capture id, reported by the plugin. Session-only; see the file header for why this cannot live on disk. */
+	private readonly draftErrors: Map<string, string> = new Map();
 
 	constructor(leaf: WorkspaceLeaf, plugin: LoopbackPlugin) {
 		super(leaf);
@@ -52,10 +76,29 @@ export class ReviewQueueView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		const onInboxChange = (file: TAbstractFile) => {
+			if (file.path === normalizePath(this.plugin.settings.inboxPath)) {
+				void this.refresh();
+			}
+		};
+		// "create" covers the very first capture ever, when the inbox file did
+		// not exist and appendToInbox had to create it. Every capture and every
+		// drafting pass after that appends or modifies, which fires "modify"
+		// instead. Both have to be watched or the first capture in a vault
+		// would land silently until something else happened to trigger a
+		// render.
+		this.registerEvent(this.app.vault.on("create", onInboxChange));
+		this.registerEvent(this.app.vault.on("modify", onInboxChange));
 		await this.render();
 	}
 
-	private async refresh(): Promise<void> {
+	/** Report a drafting failure for one capture so the reviewer sees it here, not only as a transient Notice. Safe to call whether or not this view is currently visible. */
+	reportDraftError(captureId: string, message: string): void {
+		this.draftErrors.set(captureId, message);
+		void this.refresh();
+	}
+
+	async refresh(): Promise<void> {
 		await this.render();
 	}
 
@@ -72,7 +115,14 @@ export class ReviewQueueView extends ItemView {
 		bulkRow.createEl("button", { text: "Approve selected" }).onclick = () => void this.runBulk("approve");
 		bulkRow.createEl("button", { text: "Discard selected" }).onclick = () => void this.runBulk("discard");
 
-		if (queue.pendingCount === 0) {
+		// pendingCount only counts drafts, so a capture that has landed but has
+		// no draft yet (awaitingDraft) would not register here even though it
+		// has its own group to show. The empty-state message is only correct
+		// when there is truly nothing at all: no pending draft, no capture
+		// still waiting on one, and no orphan.
+		const hasAnything =
+			queue.pendingCount > 0 || queue.staleGroups.length > 0 || queue.freshGroups.length > 0 || queue.orphanDrafts.length > 0;
+		if (!hasAnything) {
 			container.createEl("p", { text: "Nothing pending review." });
 			return;
 		}
@@ -109,6 +159,21 @@ export class ReviewQueueView extends ItemView {
 		if (group.noPageBehind) {
 			passageEl.createDiv({ cls: "loopback-no-page-behind", text: NO_PAGE_BEHIND_NOTICE });
 		}
+
+		if (group.drafts.length > 0) {
+			// A draft exists for this capture now, so any earlier failure no
+			// longer describes the current state. Drop it rather than let a
+			// stale error sit next to a card that already drafted fine.
+			this.draftErrors.delete(group.capture.id);
+		} else {
+			const failure = this.draftErrors.get(group.capture.id);
+			if (failure) {
+				passageEl.createDiv({ cls: "loopback-draft-failed", text: `Drafting failed: ${failure}` });
+			} else if (group.awaitingDraft) {
+				passageEl.createDiv({ cls: "loopback-draft-pending", text: "Drafting in progress..." });
+			}
+		}
+
 		for (const draft of group.drafts) this.renderDraftRow(groupEl, draft);
 	}
 

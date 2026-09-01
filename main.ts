@@ -9,6 +9,18 @@ file, with no network call and no model. Draft pending captures and open
 review queue both build on top of it, on their own commands, so a slow
 model call or a closed instance of Anki can never add latency to capture.
 
+TCK-076 adds a fourth command, "Capture and draft selection," the one
+motion the ticket exists for: highlight a passage, and the card for it
+appears in the sidebar beside it. It is not a fourth independent path; it
+is capture-selection, open-review-queue, and draft-pending-captures run in
+that fixed order through runCaptureAndDraft in capture-and-draft-flow.ts,
+which is what actually proves the order rather than trusting that this file
+happens to call them in the right sequence. Capture is written to disk
+before the sidebar even opens, so a passage is never at risk from whatever
+happens to drafting after that. The three original commands are untouched
+and still work on their own, since capturing in a lecture with no
+intention of drafting yet is a real workflow this ticket does not remove.
+
 The two PDF commands (TCK-073) are imported dynamically, inside their own
 callbacks, rather than at the top of this file with everything else. That
 is not a style choice: pdf-capture-command.ts pulls in pdf-source.ts, which
@@ -26,8 +38,9 @@ command, never a place in what has to work when everything else is broken.
 */
 
 import { Editor, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
-import { serializeCapture } from "./capture-format";
+import { serializeCapture, type Capture } from "./capture-format";
 import { buildCaptureRecord } from "./capture-decision";
+import { runCaptureAndDraft } from "./capture-and-draft-flow";
 import { DEFAULT_SETTINGS, LoopbackSettings, LoopbackSettingTab } from "./settings";
 import { runDraftingCommand } from "./drafting-command";
 import type { DraftAdapter } from "./adapter";
@@ -97,6 +110,19 @@ export default class LoopbackPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "capture-and-draft-selection",
+			name: "Capture and draft selection",
+			// A distinct hotkey from capture-selection's, so both stay
+			// reachable without a conflict: this one is the new one-motion
+			// path, that one is still the plain, no-drafting capture a lecture
+			// workflow depends on.
+			hotkeys: [{ modifiers: ["Mod", "Shift"], key: "Enter" }],
+			editorCallback: (editor: Editor, view: MarkdownView) => {
+				void this.captureAndDraftSelection(editor, view);
+			},
+		});
+
+		this.addCommand({
 			id: "draft-pending-captures",
 			name: "Draft pending captures",
 			callback: () => {
@@ -156,17 +182,46 @@ export default class LoopbackPlugin extends Plugin {
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_REVIEW_QUEUE);
 	}
 
-	/** Reveal the review queue in the right sidebar, reusing an existing leaf rather than opening a second one. */
+	/**
+	 * Reveal the review queue, reusing an existing leaf rather than opening a
+	 * second one. An existing leaf is revealed exactly where it already is:
+	 * Obsidian lets a reviewer drag a leaf between sidebars and persists that
+	 * choice, and this must never fight it or reset it back to the settings
+	 * default on the next capture. The settings side (left or right,
+	 * reviewSidebarSide) is consulted only when a fresh leaf has to be
+	 * created, which is the one moment there is no placement to respect yet.
+	 * That setting exists because the right sidebar is not free real estate:
+	 * a reviewer running another plugin's panel there, a chat panel say,
+	 * would otherwise get the review queue forced into a sibling tab next to
+	 * it, defeating the point of seeing source and cards at once.
+	 */
 	async openReviewQueue(): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW_QUEUE);
 		let leaf: WorkspaceLeaf;
 		if (existing.length > 0) {
 			leaf = existing[0];
 		} else {
-			leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
+			const sideLeaf =
+				this.settings.reviewSidebarSide === "left"
+					? this.app.workspace.getLeftLeaf(false)
+					: this.app.workspace.getRightLeaf(false);
+			leaf = sideLeaf ?? this.app.workspace.getLeaf(true);
 			await leaf.setViewState({ type: VIEW_TYPE_REVIEW_QUEUE, active: true });
 		}
 		void this.app.workspace.revealLeaf(leaf);
+		// Refresh the data even for an already-open leaf: opening or focusing
+		// it is not enough on its own to guarantee a capture written moments
+		// ago is already showing, and "never look like nothing happened" is
+		// the whole point of this ticket.
+		if (leaf.view instanceof ReviewQueueView) {
+			await leaf.view.refresh();
+		}
+	}
+
+	/** The open review queue view instance, if a leaf of that type currently exists. Used to hand a drafting failure to the sidebar rather than only a Notice. */
+	private getReviewView(): ReviewQueueView | undefined {
+		const [leaf] = this.app.workspace.getLeavesOfType(VIEW_TYPE_REVIEW_QUEUE);
+		return leaf && leaf.view instanceof ReviewQueueView ? leaf.view : undefined;
 	}
 
 	async loadSettings(): Promise<void> {
@@ -177,12 +232,21 @@ export default class LoopbackPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	/** Append the selection to the inbox, or say plainly that there was nothing to capture. */
-	async captureSelection(editor: Editor, view: MarkdownView): Promise<void> {
+	/**
+	 * The guard checks and record-building shared by captureSelection and
+	 * captureAndDraftSelection: an empty selection or a refused capture (the
+	 * 50-pending-draft ceiling) already showed its own Notice by the time
+	 * this returns undefined, so neither caller has to decide what a missing
+	 * record means or duplicate the message. Never writes anything; that
+	 * stays the caller's job, which is what lets captureAndDraftSelection
+	 * write, reveal, and draft in a specific order instead of this method
+	 * choosing the order for it.
+	 */
+	private async prepareCapture(editor: Editor, view: MarkdownView): Promise<Capture | undefined> {
 		const selection = editor.getSelection();
 		if (selection.trim().length === 0) {
 			new Notice("Loopback: nothing selected, nothing captured.");
-			return;
+			return undefined;
 		}
 
 		// Decision 5: an inbox that only fills is a failure mode, and the fix
@@ -193,7 +257,7 @@ export default class LoopbackPlugin extends Plugin {
 			new Notice(
 				`Loopback: capture refused. More than ${MAX_PENDING_DRAFTS} drafts are pending review. Open the review queue and clear some before capturing more.`
 			);
-			return;
+			return undefined;
 		}
 
 		const sourcePath = view.file ? view.file.path : "unknown";
@@ -203,10 +267,54 @@ export default class LoopbackPlugin extends Plugin {
 			lines.push(editor.getLine(line));
 		}
 
-		const record = buildCaptureRecord({ selectionText: selection, sourcePath, lines, cursorLine });
+		return buildCaptureRecord({ selectionText: selection, sourcePath, lines, cursorLine });
+	}
+
+	/** Append the selection to the inbox, or say plainly that there was nothing to capture. Drafting and the sidebar are untouched; this is the plain, no-drafting capture a lecture workflow depends on. */
+	async captureSelection(editor: Editor, view: MarkdownView): Promise<void> {
+		const record = await this.prepareCapture(editor, view);
+		if (!record) return;
 
 		await this.appendToInbox(serializeCapture(record));
 		new Notice(`Loopback: capture saved to ${this.settings.inboxPath}`);
+	}
+
+	/**
+	 * The one-motion path: capture, then reveal the sidebar, then draft, in
+	 * that fixed order, via runCaptureAndDraft. Capture is written to the
+	 * inbox before the sidebar even opens, so an interrupted or failed draft
+	 * can never lose the passage. Drafting is started, not awaited to
+	 * completion, by runCaptureAndDraft, so a slow model call cannot delay
+	 * anything the reviewer is already looking at; any error it produces for
+	 * this specific capture is instead handed to the sidebar once drafting
+	 * finishes, so the failure is reachable there rather than only a Notice
+	 * that has already scrolled away.
+	 */
+	async captureAndDraftSelection(editor: Editor, view: MarkdownView): Promise<void> {
+		const record = await this.prepareCapture(editor, view);
+		if (!record) return;
+
+		await runCaptureAndDraft({
+			capture: async () => {
+				await this.appendToInbox(serializeCapture(record));
+				new Notice(`Loopback: capture saved, drafting started.`);
+			},
+			reveal: async () => {
+				await this.openReviewQueue();
+			},
+			draft: async () => {
+				const result = await runDraftingCommand(this.app, this.settings.inboxPath, buildDraftAdapter(this.settings));
+				const reviewView = this.getReviewView();
+				if (!reviewView || !result) return;
+				const prefix = `${record.id}: `;
+				for (const message of result.errors) {
+					if (message.startsWith(prefix)) {
+						reviewView.reportDraftError(record.id, message.slice(prefix.length));
+					}
+				}
+				await reviewView.refresh();
+			},
+		});
 	}
 
 	/** Create the inbox file on first capture, otherwise append. Vault I/O only, no network. */

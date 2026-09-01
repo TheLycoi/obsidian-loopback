@@ -4,17 +4,25 @@ orchestrator in drafting.ts, and appends whatever it returns. This is the
 only file in the drafting path that touches the vault or shows a Notice.
 Nothing here runs as part of captureSelection in main.ts, so a slow or
 failing model call can never add latency to capture.
+
+TCK-076 has this return the DraftingResult (or undefined when there was
+nothing to run or the whole pass failed before producing one) instead of
+nothing. The plain "Draft pending captures" command still ignores it, same
+behavior as before. The capture-and-draft-selection path in main.ts is the
+new reader: it matches result.errors against the capture id it just wrote
+and hands any match to the review sidebar, since a Notice alone is not
+"reachable" the way the ticket asks for.
 */
 
 import { type App, Notice, TFile } from "obsidian";
-import { draftPendingCaptures } from "./drafting";
+import { draftPendingCaptures, type DraftingResult } from "./drafting";
 import type { DraftAdapter } from "./adapter";
 
-export async function runDraftingCommand(app: App, inboxPath: string, adapter: DraftAdapter): Promise<void> {
+export async function runDraftingCommand(app: App, inboxPath: string, adapter: DraftAdapter): Promise<DraftingResult | undefined> {
 	const file = app.vault.getAbstractFileByPath(inboxPath);
 	if (!(file instanceof TFile)) {
 		new Notice("Loopback: no inbox file to draft from yet.");
-		return;
+		return undefined;
 	}
 
 	const fileContent = await app.vault.read(file);
@@ -43,8 +51,11 @@ export async function runDraftingCommand(app: App, inboxPath: string, adapter: D
 				console.error("Loopback drafting error:", message);
 			}
 		}
+
+		return result;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "unknown error";
 		new Notice(`Loopback: drafting failed (${message}).`);
+		return undefined;
 	}
 }

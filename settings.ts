@@ -10,6 +10,8 @@ import type LoopbackPlugin from "./main";
 
 export type ApiKeySource = "env" | "keychain" | "vault";
 export type DraftingProvider = "anthropic" | "openai-compatible";
+/** Which sidebar the review queue view opens in when it has to open a fresh leaf. Only consulted when no leaf of that view type exists yet; an already-open leaf is revealed wherever it sits, even if the user has since dragged it to the other side. */
+export type ReviewSidebarSide = "left" | "right";
 
 export interface LoopbackSettings {
 	inboxPath: string;
@@ -33,6 +35,15 @@ export interface LoopbackSettings {
 	exportDeck: string;
 	/** Vault-relative path to the append-only disposition log: every approve, edit-then-approve, and discard, with a timestamp. */
 	dispositionLogPath: string;
+	/**
+	 * Which sidebar the review queue view opens a fresh leaf in. Defaults to
+	 * right, but a right sidebar already occupied by another plugin the owner
+	 * uses constantly is exactly the case this exists for: set it to left and
+	 * the review queue stops competing with that plugin for the same tab
+	 * strip. Read only when a leaf has to be created; an existing leaf is
+	 * always revealed where it already is, never moved.
+	 */
+	reviewSidebarSide: ReviewSidebarSide;
 }
 
 export const DEFAULT_SETTINGS: LoopbackSettings = {
@@ -46,6 +57,7 @@ export const DEFAULT_SETTINGS: LoopbackSettings = {
 	vaultApiKey: "",
 	exportDeck: "All::2 Default::Wiki",
 	dispositionLogPath: "loopback-disposition-log.md",
+	reviewSidebarSide: "right",
 };
 
 export class LoopbackSettingTab extends PluginSettingTab {
@@ -180,6 +192,22 @@ export class LoopbackSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.dispositionLogPath)
 					.onChange(async (value) => {
 						this.plugin.settings.dispositionLogPath = value.trim() || DEFAULT_SETTINGS.dispositionLogPath;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Review sidebar side")
+			.setDesc(
+				"Which sidebar a fresh review queue leaf opens in. If another plugin already occupies the right sidebar, set this to left so the review queue does not become a sibling tab competing with it. Only used when no review queue leaf is already open; an existing leaf is always revealed wherever it already sits, including after you drag it to the other side."
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("right", "Right")
+					.addOption("left", "Left")
+					.setValue(this.plugin.settings.reviewSidebarSide)
+					.onChange(async (value) => {
+						this.plugin.settings.reviewSidebarSide = value as ReviewSidebarSide;
 						await this.plugin.saveSettings();
 					})
 			);
