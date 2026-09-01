@@ -7,12 +7,17 @@ still shipped non-atomic cards that restated the source; rules that can be
 checked by counting should be checked by counting rather than trusted to a
 second model call.
 
-The six checks below reimplement the idea behind AnkiLens's content
-signals, and reuse the thresholds the design note already names as facts
-free to reuse (the 80-word "long card" ceiling among them), without reading
-or copying any of that project's code. Its repository ships no license
-file, so the code is not free to copy even though the thresholds and the
-approach are.
+Six of the seven checks below reimplement the idea behind AnkiLens's
+content signals, and reuse the thresholds the design note already names as
+facts free to reuse (the 80-word "long card" ceiling among them), without
+reading or copying any of that project's code. Its repository ships no
+license file, so the code is not free to copy even though the thresholds
+and the approach are.
+
+The seventh, atom grounding, is TCK-078's: with wiki context now sitting
+beside the passage in what a drafting or critique call reads, this is the
+mechanical proof that a fact from that context, or from anywhere else that
+is not the passage, never ends up inside a cloze.
 */
 
 export type LintFailure =
@@ -21,11 +26,23 @@ export type LintFailure =
 	| "framing-in-braces"
 	| "back-extra-substring"
 	| "back-extra-near-restatement"
-	| "length-ceiling";
+	| "length-ceiling"
+	| "atom-not-grounded";
 
 export interface LintCandidate {
 	cardText: string;
 	backExtra: string;
+	/**
+	 * The passage the card was drafted from. Optional, and skipped when
+	 * absent, for backward compatibility with a caller that has no passage
+	 * to check against; every call from drafting.ts supplies it. TCK-078
+	 * adds this: the tested atom inside every cloze has to be present in the
+	 * passage, mechanically checked here rather than trusted to the model's
+	 * own adherence to the prompt, since wiki context now sits beside the
+	 * passage in what the model reads and could otherwise leak a fact the
+	 * passage never stated into a cloze.
+	 */
+	passage?: string;
 }
 
 export interface LintResult {
@@ -141,6 +158,26 @@ function checkLengthCeiling(cardText: string, backExtra: string): boolean {
 	return countWords(cardText) + countWords(backExtra) <= MAX_CARD_WORDS;
 }
 
+/**
+ * Every cloze's content must appear, normalized, as a substring of the
+ * passage. When no passage was supplied, the check is not applicable and
+ * passes by default, the same convention checkFramingInBraces and the rest
+ * would use if they ever grew an optional input. This is the mechanical
+ * backstop for the rule that wiki context, and a critique pass that has
+ * read it, must never turn into card content: whatever text ends up inside
+ * a cloze, it either came from the passage or this check catches it.
+ */
+function checkAtomGrounding(clozes: ClozeMatch[], passage: string | undefined): boolean {
+	if (passage === undefined) return true;
+	const normalizedPassage = normalizePlainText(passage);
+	for (const cloze of clozes) {
+		const normalizedContent = normalizePlainText(cloze.content);
+		if (normalizedContent.length === 0) return false;
+		if (!normalizedPassage.includes(normalizedContent)) return false;
+	}
+	return true;
+}
+
 /** Run every check and return the failures found, if any. A draft with no failures has passed set to true. */
 export function lintDraft(candidate: LintCandidate): LintResult {
 	const clozes = extractClozes(candidate.cardText);
@@ -152,6 +189,7 @@ export function lintDraft(candidate: LintCandidate): LintResult {
 	if (!checkBackExtraSubstring(candidate.cardText, candidate.backExtra)) failures.push("back-extra-substring");
 	if (!checkBackExtraNearRestatement(candidate.cardText, candidate.backExtra)) failures.push("back-extra-near-restatement");
 	if (!checkLengthCeiling(candidate.cardText, candidate.backExtra)) failures.push("length-ceiling");
+	if (!checkAtomGrounding(clozes, candidate.passage)) failures.push("atom-not-grounded");
 
 	return { passed: failures.length === 0, failures };
 }

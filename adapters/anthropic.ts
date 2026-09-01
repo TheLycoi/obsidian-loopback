@@ -9,6 +9,7 @@ import { getPromptText } from "../prompt-registry";
 import { resolveApiKey, type ApiKeySource } from "../keys";
 import { parseModelOutput } from "../draft-parsing";
 import { DraftingAdapterError } from "./adapter-error";
+import { buildUserMessage } from "./message";
 
 export interface AnthropicAdapterOptions {
 	modelId: string;
@@ -60,7 +61,7 @@ export class AnthropicAdapter implements DraftAdapter {
 				messages: [
 					{
 						role: "user",
-						content: `Source: ${context.source}\nLocation: ${context.location}\n\nPassage:\n${passage}`,
+						content: buildUserMessage(passage, context),
 					},
 				],
 			}),

@@ -12,6 +12,19 @@ line it sits under. Treat the source and location as context for judging
 what the passage is about, not as material to draw facts from. Only the
 passage text is fair game for card content.
 
+You may also receive up to three more sections: the source page's own
+text, the seeds and cards already recorded for that page, and a small set
+of related concept or entity pages from the vault's own wiki. Use this the
+way you would use a style guide and a glossary you are not allowed to quote
+from. It tells you the terms the vault already uses for this idea, so you
+word the cloze the way the owner already words it elsewhere rather than
+inventing a fresh phrasing every time. It tells you what has already been
+carded, so you do not draft a near-duplicate of an existing card. It never
+tells you a new fact to put in a cloze. If this context mentions something
+true and relevant that the passage itself does not state, that fact stays
+out of every card you draft here, full stop, the same as any other fact
+you might already know but the passage never said.
+
 ## What a good card looks like
 
 One testable atom per card. The atom is the single fact that gets graded

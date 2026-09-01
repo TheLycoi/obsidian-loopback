@@ -7,6 +7,22 @@ block it came from.
 
 Like capture-format.ts, this module has no dependency on the Obsidian API,
 so it can be unit tested with plain Node.
+
+TCK-078 adds three optional fields for the self-critique pass:
+critiquePromptVersion, originalCardText, and originalBackExtra. All three
+follow the same rule TCK-072's page field set on Capture: a field a given
+draft cannot fill in honestly is left out entirely, not written empty, so
+an older draft with no critique recorded round-trips with none of these
+keys at all, exactly as before this ticket, and every existing test that
+constructs a DraftRecord literal without them still deep-equals what
+parseDrafts returns. originalCardText and originalBackExtra are further
+omitted even when critique ran, when critique left the card unchanged, so
+their presence itself signals "critique rewrote this," not just "critique
+ran" (critiquePromptVersion alone signals the latter). Both are stored
+through JSON.stringify rather than as raw attribute text, since an
+attribute line cannot hold an embedded newline the way the block's own
+cardText and backExtra fields can; a card that happens to span more than
+one line still round-trips correctly as a result.
 */
 
 import type { LintFailure } from "./linter";
@@ -30,6 +46,12 @@ export interface DraftRecord {
 	promptVersion: string;
 	modelId: string;
 	lintFailures: LintFailure[];
+	/** The critique pass's prompt version, present only when a critique pass ran on this draft. */
+	critiquePromptVersion?: string;
+	/** What the draft pass produced before critique revised it. Present only when critique changed the card; absent when critique left it unchanged or did not run. */
+	originalCardText?: string;
+	/** The Back Extra the draft pass produced before critique revised it. Present under the same condition as originalCardText. */
+	originalBackExtra?: string;
 }
 
 function serializeLintFailures(failures: LintFailure[]): string {
@@ -55,6 +77,9 @@ export function serializeDraft(draft: DraftRecord): string {
 		`- promptVersion: ${draft.promptVersion}`,
 		`- modelId: ${draft.modelId}`,
 		`- lint: ${serializeLintFailures(draft.lintFailures)}`,
+		...(draft.critiquePromptVersion !== undefined ? [`- critiquePromptVersion: ${draft.critiquePromptVersion}`] : []),
+		...(draft.originalCardText !== undefined ? [`- originalCardText: ${JSON.stringify(draft.originalCardText)}`] : []),
+		...(draft.originalBackExtra !== undefined ? [`- originalBackExtra: ${JSON.stringify(draft.originalBackExtra)}`] : []),
 		"",
 		draft.cardText,
 		"",
@@ -85,6 +110,31 @@ function parseAttributes(block: string): Record<string, string> {
 	return attributes;
 }
 
+/**
+ * Build a DraftRecord from a block's parsed attributes and body. Shared by
+ * parseDrafts and findDraftBlock so the optional critique fields are read
+ * back the same way, once, rather than twice. critiquePromptVersion,
+ * originalCardText, and originalBackExtra are set only when their attribute
+ * line was actually present, matching how serializeDraft only wrote them
+ * when the record carried them.
+ */
+function buildRecordFromAttributes(recordId: string, attributes: Record<string, string>, cardText: string, backExtra: string): DraftRecord {
+	const record: DraftRecord = {
+		id: recordId,
+		captureId: attributes.capture ?? "",
+		status: (attributes.status as DraftStatus) ?? "draft",
+		promptVersion: attributes.promptVersion ?? "",
+		modelId: attributes.modelId ?? "",
+		lintFailures: deserializeLintFailures(attributes.lint ?? "none"),
+		cardText,
+		backExtra,
+	};
+	if (attributes.critiquePromptVersion !== undefined) record.critiquePromptVersion = attributes.critiquePromptVersion;
+	if (attributes.originalCardText !== undefined) record.originalCardText = JSON.parse(attributes.originalCardText);
+	if (attributes.originalBackExtra !== undefined) record.originalBackExtra = JSON.parse(attributes.originalBackExtra);
+	return record;
+}
+
 /** Read every draft block out of an inbox file's contents, in file order. */
 export function parseDrafts(fileContent: string): DraftRecord[] {
 	const drafts: DraftRecord[] = [];
@@ -94,16 +144,7 @@ export function parseDrafts(fileContent: string): DraftRecord[] {
 	while ((match = pattern.exec(normalized)) !== null) {
 		const headingId = match[1];
 		const attributes = parseAttributes(match[2]);
-		drafts.push({
-			id: attributes.id ?? headingId,
-			captureId: attributes.capture ?? "",
-			status: (attributes.status as DraftStatus) ?? "draft",
-			promptVersion: attributes.promptVersion ?? "",
-			modelId: attributes.modelId ?? "",
-			lintFailures: deserializeLintFailures(attributes.lint ?? "none"),
-			cardText: match[3],
-			backExtra: match[4],
-		});
+		drafts.push(buildRecordFromAttributes(attributes.id ?? headingId, attributes, match[3], match[4]));
 	}
 	return drafts;
 }
@@ -135,16 +176,7 @@ export function findDraftBlock(fileContent: string, id: string): DraftBlockLocat
 		return {
 			start: match.index,
 			end: match.index + match[0].length,
-			record: {
-				id: recordId,
-				captureId: attributes.capture ?? "",
-				status: (attributes.status as DraftStatus) ?? "draft",
-				promptVersion: attributes.promptVersion ?? "",
-				modelId: attributes.modelId ?? "",
-				lintFailures: deserializeLintFailures(attributes.lint ?? "none"),
-				cardText: match[3],
-				backExtra: match[4],
-			},
+			record: buildRecordFromAttributes(recordId, attributes, match[3], match[4]),
 		};
 	}
 	return undefined;
