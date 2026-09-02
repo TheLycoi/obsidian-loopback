@@ -93,3 +93,49 @@ test("resolveApiKey never throws a message containing an injected key value", ()
 		assert.ok(!error.message.includes("placeholder-not-a-real-key"));
 	}
 });
+
+/*
+TCK-080 follow-on. A key stored in the keychain under the environment
+variable's name, which is the convention nearly everyone follows, was
+invisible to Loopback: only the plugin's own descriptive service label was
+ever queried. The symptom was "No API key found" while the key sat in the
+keychain the whole time.
+*/
+
+test("a key stored under the environment variable name is found in the keychain", () => {
+	const asked = [];
+	const key = resolveApiKey({
+		apiKeySource: "env",
+		envVarName: "ANTHROPIC_API_KEY",
+		serviceLabel: "Loopback Anthropic API key",
+		readEnv: () => undefined,
+		readKeychain: (name) => {
+			asked.push(name);
+			return name === "ANTHROPIC_API_KEY" ? "sk-test-from-keychain" : undefined;
+		},
+	});
+	assert.equal(key, "sk-test-from-keychain");
+	assert.deepEqual(asked, ["Loopback Anthropic API key", "ANTHROPIC_API_KEY"]);
+});
+
+test("the plugin's own service label still wins when both exist", () => {
+	const key = resolveApiKey({
+		apiKeySource: "env",
+		envVarName: "ANTHROPIC_API_KEY",
+		serviceLabel: "Loopback Anthropic API key",
+		readEnv: () => undefined,
+		readKeychain: (name) => (name === "Loopback Anthropic API key" ? "sk-specific" : "sk-generic"),
+	});
+	assert.equal(key, "sk-specific");
+});
+
+test("the environment variable still beats both keychain names", () => {
+	const key = resolveApiKey({
+		apiKeySource: "env",
+		envVarName: "ANTHROPIC_API_KEY",
+		serviceLabel: "Loopback Anthropic API key",
+		readEnv: () => "sk-from-env",
+		readKeychain: () => "sk-from-keychain",
+	});
+	assert.equal(key, "sk-from-env");
+});

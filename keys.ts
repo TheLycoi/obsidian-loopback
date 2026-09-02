@@ -75,9 +75,19 @@ export function resolveApiKey(request: KeyResolutionRequest): string {
 	const fromEnv = readEnv(request.envVarName);
 	if (fromEnv) return fromEnv;
 
+	// Two keychain names are tried, in this order, and the second one is the
+	// one that actually matches how people store keys. serviceLabel is
+	// Loopback's own descriptive name ("Loopback Anthropic API key"), which
+	// only finds a key someone created specifically for this plugin.
+	// envVarName ("ANTHROPIC_API_KEY") is the convention almost everyone
+	// already follows, and a key stored that way was previously invisible to
+	// Loopback even though it was sitting right there, which read as "no API
+	// key found" when one existed.
 	const readKeychain = request.readKeychain ?? defaultReadKeychain;
-	const fromKeychain = readKeychain(request.serviceLabel);
-	if (fromKeychain) return fromKeychain;
+	for (const name of [request.serviceLabel, request.envVarName]) {
+		const fromKeychain = readKeychain(name);
+		if (fromKeychain) return fromKeychain;
+	}
 
 	if (request.apiKeySource === "vault" && request.vaultKey) {
 		return request.vaultKey;
