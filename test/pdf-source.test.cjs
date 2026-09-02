@@ -27,6 +27,7 @@ const {
 	quoteAppearsOnPage,
 	buildRawSourceCapture,
 	buildGroundedRawSourceCapture,
+	buildSelectionFromPdfViewer,
 	proposeRawSourceCaptures,
 	RawSourceSelectionError,
 } = require("../.test-build/pdf-source.cjs");
@@ -305,4 +306,71 @@ test("the real PDF in sources/ is still byte-identical after every test in this 
 	const stat = fs.statSync(REAL_PDF_PATH);
 	assert.equal(buffer.length, 1198211, "fphar-08-00438.pdf's known byte length; a change here means something wrote to it");
 	assert.ok(stat.isFile());
+});
+
+/*
+TCK-080. buildSelectionFromPdfViewer: the whole conversion from what
+Obsidian's PDF viewer hands over to what the capture pipeline already
+accepts, proven without a DOM, a PDF, or Obsidian. The page arrives as a
+string because a DOM attribute is a string, and every way that can go wrong
+has to produce a message a reader can act on rather than a crash.
+*/
+
+test("a normal viewer selection becomes a raw source selection, page parsed from the attribute", () => {
+	const selection = buildSelectionFromPdfViewer({
+		selectedText: "  Spaced repetition works because retrieval is effortful.  ",
+		pageAttribute: "7",
+		sourcePath: "sources/paper.pdf",
+	});
+	assert.equal(selection.page, 7);
+	assert.equal(selection.sourcePath, "sources/paper.pdf");
+	// Trimmed at the ends, and untouched inside: quoteAppearsOnPage collapses
+	// whitespace when it compares, so rewriting the quote here would store
+	// something the reader never selected.
+	assert.equal(selection.quote, "Spaced repetition works because retrieval is effortful.");
+});
+
+test("a selection broken across lines by the text layer keeps its interior whitespace", () => {
+	const selection = buildSelectionFromPdfViewer({
+		selectedText: "retrieval\npractice\n  beats\trereading",
+		pageAttribute: "2",
+		sourcePath: "sources/paper.pdf",
+	});
+	assert.equal(selection.quote, "retrieval\npractice\n  beats\trereading");
+});
+
+test("selecting nothing is refused with a message rather than captured empty", () => {
+	assert.throws(
+		() => buildSelectionFromPdfViewer({ selectedText: "   ", pageAttribute: "3", sourcePath: "sources/paper.pdf" }),
+		(error) => error instanceof RawSourceSelectionError && /nothing selected/i.test(error.message)
+	);
+});
+
+test("a selection with no page element found is refused and says what to do", () => {
+	assert.throws(
+		() => buildSelectionFromPdfViewer({ selectedText: "a real passage", pageAttribute: null, sourcePath: "sources/paper.pdf" }),
+		(error) => error instanceof RawSourceSelectionError && /which page/i.test(error.message)
+	);
+});
+
+test("a page attribute that is not a positive integer is refused, and the message quotes what was seen", () => {
+	for (const bad of ["", "0", "-1", "3.5", "seven"]) {
+		assert.throws(
+			() => buildSelectionFromPdfViewer({ selectedText: "a real passage", pageAttribute: bad, sourcePath: "sources/paper.pdf" }),
+			(error) => error instanceof RawSourceSelectionError,
+			`expected refusal for page attribute ${JSON.stringify(bad)}`
+		);
+	}
+});
+
+test("the sources/ boundary is still enforced downstream, not restated here", () => {
+	// buildSelectionFromPdfViewer does not police the path: buildRawSourceCapture
+	// owns that rule, and duplicating it is how two copies drift apart.
+	const selection = buildSelectionFromPdfViewer({
+		selectedText: "a real passage",
+		pageAttribute: "1",
+		sourcePath: "notes/not-a-source.pdf",
+	});
+	assert.equal(selection.sourcePath, "notes/not-a-source.pdf");
+	assert.throws(() => buildRawSourceCapture(selection), RawSourceSelectionError);
 });

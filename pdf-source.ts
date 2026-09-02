@@ -137,6 +137,54 @@ export function buildGroundedRawSourceCapture(
 	return { capture, grounded: quoteAppearsOnPage(pageText, selection.quote) };
 }
 
+/**
+ * A selection as Obsidian's own PDF viewer hands it over: the text the
+ * reader dragged across, the raw data-page-number attribute from the page
+ * element the selection starts in, and the vault path of the open file.
+ *
+ * The page arrives as a string because that is what a DOM attribute is.
+ * Parsing it here rather than at the call site is the point: it keeps the
+ * whole conversion testable without a DOM, a PDF, or Obsidian, which is the
+ * same separation buildRawSourceCapture already uses.
+ */
+export interface PdfViewerSelection {
+	selectedText: string;
+	/** Value of data-page-number on the nearest ancestor page element, or null when the walk up the DOM found none. */
+	pageAttribute: string | null;
+	sourcePath: string;
+}
+
+/**
+ * Turn a viewer selection into the same RawSourceSelection the typed-in
+ * path produces, so everything downstream is untouched by where the
+ * selection came from.
+ *
+ * The quote is trimmed and nothing else. It is deliberately not
+ * whitespace-normalized here: pdf.js breaks a selection across text spans
+ * and lines, and quoteAppearsOnPage already collapses whitespace on both
+ * sides when it checks grounding. Rewriting the quote to look tidier would
+ * store something the reader did not select, which is exactly the grounding
+ * rule this pipeline exists to keep.
+ */
+export function buildSelectionFromPdfViewer(selection: PdfViewerSelection): RawSourceSelection {
+	const quote = selection.selectedText.trim();
+	if (quote.length === 0) {
+		throw new RawSourceSelectionError("Loopback: nothing selected in the PDF, nothing captured.");
+	}
+	if (selection.pageAttribute === null) {
+		throw new RawSourceSelectionError(
+			"Loopback: could not tell which page that selection is on. Select text inside a rendered page and try again."
+		);
+	}
+	const page = Number(selection.pageAttribute);
+	if (!Number.isInteger(page) || page < 1) {
+		throw new RawSourceSelectionError(
+			`Loopback: the viewer reported page "${selection.pageAttribute}", which is not a page number.`
+		);
+	}
+	return { sourcePath: selection.sourcePath, page, quote };
+}
+
 /** One span a model proposes for capture: a page and the passage on it, nothing else. Not a candidate card; see the module comment. */
 export interface SpanProposal {
 	page: number;

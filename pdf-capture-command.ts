@@ -32,6 +32,7 @@ import { App, FuzzySuggestModal, Modal, Notice, Setting, TFile } from "obsidian"
 import { serializeCapture } from "./capture-format";
 import {
 	buildGroundedRawSourceCapture,
+	buildSelectionFromPdfViewer,
 	extractPdfPages,
 	proposeRawSourceCaptures,
 	RawSourceSelectionError,
@@ -325,4 +326,86 @@ async function runAutomaticHighlightOn(
 	new Notice(
 		`Loopback: captured ${result.captures.length} span(s) from ${file.path}, rejected ${result.rejected.length}. Review them in the queue like any other capture before drafting.`
 	);
+}
+
+
+/**
+ * Read the passage the reader has selected in Obsidian's own PDF viewer,
+ * and build a capture from it. TCK-080.
+ *
+ * This exists because the older manual path never showed a PDF at all: it
+ * asked the reader to pick a file, type a page number, and paste a quote,
+ * which is transcription from a document open somewhere else. Obsidian
+ * already renders PDFs with pdf.js, and pdf.js gives every rendered page a
+ * div.page carrying data-page-number, so a selection in that viewer already
+ * carries both halves a capture needs. The reader highlights; nothing gets
+ * typed.
+ *
+ * Prepares only. It does not write, so the caller keeps ownership of the
+ * order in which capture, reveal, and draft happen, exactly as main.ts's
+ * prepareCapture does for a Markdown note. Returns null when there is
+ * nothing to capture, having already shown the reason.
+ */
+export async function preparePdfHighlightCapture(app: App, settings: LoopbackSettings): Promise<GroundedCapture | null> {
+	if (await shouldRefuseCapture(app, settings)) {
+		new Notice(REFUSAL_NOTICE);
+		return null;
+	}
+
+	const file = app.workspace.getActiveFile();
+	if (!file || file.extension.toLowerCase() !== "pdf") {
+		new Notice("Loopback: open a PDF and select a passage in it first.");
+		return null;
+	}
+
+	// activeWindow rather than window: Obsidian sets it per window, so this
+	// keeps working when the PDF has been popped out into its own window,
+	// which is a natural way to read one while taking notes in the main one.
+	const win = typeof activeWindow !== "undefined" ? activeWindow : window;
+	const domSelection = win.getSelection();
+	const anchor = domSelection?.anchorNode ?? null;
+	const anchorEl = anchor === null ? null : anchor.nodeType === 1 ? (anchor as Element) : anchor.parentElement;
+	const pageEl = anchorEl?.closest(".page[data-page-number]") ?? null;
+
+	let selection;
+	try {
+		selection = buildSelectionFromPdfViewer({
+			selectedText: domSelection?.toString() ?? "",
+			pageAttribute: pageEl?.getAttribute("data-page-number") ?? null,
+			sourcePath: file.path,
+		});
+	} catch (error) {
+		// Includes the sources/ boundary, which buildRawSourceCapture owns and
+		// which is deliberately not restated here.
+		new Notice(error instanceof RawSourceSelectionError ? error.message : "Loopback: could not build a capture from that selection.");
+		return null;
+	}
+
+	let pages: PdfPage[];
+	try {
+		pages = await extractPagesForFile(app, file);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "unknown error";
+		new Notice(`Loopback: could not read ${file.path} (${message}).`);
+		return null;
+	}
+
+	try {
+		return buildGroundedRawSourceCapture(selection, pages);
+	} catch (error) {
+		new Notice(error instanceof RawSourceSelectionError ? error.message : "Loopback: could not build a capture from that selection.");
+		return null;
+	}
+}
+
+/** Write a prepared PDF-highlight capture to the inbox, saying so when the quote could not be confirmed against the page it claims. Split from preparation so the caller controls ordering. */
+export async function writePdfHighlightCapture(app: App, inboxPath: string, grounded: GroundedCapture): Promise<void> {
+	await appendCaptureBlock(app, inboxPath, serializeCapture(grounded.capture));
+	if (grounded.grounded) {
+		new Notice(`Loopback: highlight captured, drafting started.`);
+	} else {
+		new Notice(
+			`Loopback: highlight captured to ${inboxPath}, but it could not be verified against ${grounded.capture.location}'s extracted text. It was still saved; check it before approving.`
+		);
+	}
 }

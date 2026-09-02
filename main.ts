@@ -182,6 +182,56 @@ export default class LoopbackPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "capture-and-draft-pdf-highlight",
+			name: "Capture and draft PDF highlight",
+			// The PDF equivalent of capture-and-draft-selection, and the reason
+			// this ticket existed: the older PDF command never showed a PDF, it
+			// asked for a page number and a pasted quote. Here the reader
+			// highlights in Obsidian's own viewer and presses one key.
+			//
+			// Dynamically imported for the same reason the other two PDF
+			// commands are: the module graph behind it reaches pdf-parse, whose
+			// browser build touches DOMMatrix at load time, and nothing that
+			// fragile belongs in what has to work when everything else is broken.
+			hotkeys: [{ modifiers: ["Mod", "Shift"], key: "P" }],
+			callback: () => {
+				void (async () => {
+					try {
+						const { preparePdfHighlightCapture, writePdfHighlightCapture } = await import("./pdf-capture-command");
+						const grounded = await preparePdfHighlightCapture(this.app, this.settings);
+						if (!grounded) return;
+
+						await runCaptureAndDraft({
+							// Capture first and always: an interrupted or failed
+							// draft can never cost the reader the passage.
+							capture: async () => {
+								await writePdfHighlightCapture(this.app, this.settings.inboxPath, grounded);
+							},
+							reveal: async () => {
+								await this.openReviewQueue();
+							},
+							draft: async () => {
+								const result = await runDraftingCommand(this.app, this.settings.inboxPath, buildDraftAdapter(this.settings));
+								const reviewView = this.getReviewView();
+								if (!reviewView || !result) return;
+								const prefix = `${grounded.capture.id}: `;
+								for (const message of result.errors) {
+									if (message.startsWith(prefix)) {
+										reviewView.reportDraftError(grounded.capture.id, message.slice(prefix.length));
+									}
+								}
+								await reviewView.refresh();
+							},
+						});
+					} catch (error) {
+						const message = error instanceof Error ? error.message : "unknown error";
+						new Notice(`Loopback: PDF highlight capture failed (${message}).`);
+					}
+				})();
+			},
+		});
+
+		this.addCommand({
 			id: "automatic-highlight-pdf",
 			name: "Automatic highlight (PDF)",
 			callback: () => {
