@@ -8,7 +8,7 @@ TCK-036 had to fall back on.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildCaptureRecord, resolveCaptureLocation } = require("../.test-build/capture-decision.cjs");
+const { buildCaptureRecord, resolveCaptureLocation, markSelectionAsHighlight } = require("../.test-build/capture-decision.cjs");
 const { parseCaptures } = require("../.test-build/capture-format.cjs");
 
 test("resolveCaptureLocation finds the nearest heading at or above the cursor line", () => {
@@ -78,4 +78,47 @@ test("buildCaptureRecord's output round-trips through capture-format.ts unchange
 
 	assert.equal(parsed.length, 1);
 	assert.deepEqual(parsed[0], record);
+});
+
+/*
+TCK-082. Highlighter mode: dragging across a passage marks it and captures
+it in one motion. The rule that matters is the reader's own, that a passage
+already highlighted must not be marked a second time, because "====text===="
+renders as literal equals signs rather than as a highlight.
+*/
+
+test("dragging an unmarked passage wraps it in Obsidian's own highlight syntax", () => {
+	const marking = markSelectionAsHighlight("the alimentary canal");
+	assert.equal(marking.replacement, "==the alimentary canal==");
+	assert.equal(marking.quote, "the alimentary canal");
+	assert.equal(marking.alreadyMarked, false);
+});
+
+test("dragging a passage that is already highlighted leaves the text untouched", () => {
+	const marking = markSelectionAsHighlight("==the alimentary canal==");
+	assert.equal(marking.replacement, undefined, "no replacement, so the editor is never written to");
+	assert.equal(marking.quote, "the alimentary canal", "the card is built from the passage, never from the markers");
+	assert.equal(marking.alreadyMarked, true);
+});
+
+test("surrounding whitespace from a sloppy drag is trimmed before marking", () => {
+	assert.equal(markSelectionAsHighlight("  peritoneum  ").replacement, "==peritoneum==");
+});
+
+test("an empty or whitespace-only drag produces nothing to mark and nothing to capture", () => {
+	for (const empty of ["", "   ", "\n\t"]) {
+		const marking = markSelectionAsHighlight(empty);
+		assert.equal(marking.replacement, undefined);
+		assert.equal(marking.quote, "");
+	}
+});
+
+test("a passage that merely contains equals signs is still marked", () => {
+	// Not already highlighted: the markers have to be at both ends.
+	assert.equal(markSelectionAsHighlight("n == 42 subjects").replacement, "==n == 42 subjects==");
+	assert.equal(markSelectionAsHighlight("==unclosed").replacement, "====unclosed==");
+});
+
+test("the bare marker alone is too short to count as an existing highlight", () => {
+	assert.equal(markSelectionAsHighlight("====").alreadyMarked, false);
 });

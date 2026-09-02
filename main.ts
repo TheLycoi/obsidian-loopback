@@ -39,7 +39,7 @@ command, never a place in what has to work when everything else is broken.
 
 import { Editor, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { serializeCapture, type Capture } from "./capture-format";
-import { buildCaptureRecord } from "./capture-decision";
+import { buildCaptureRecord, markSelectionAsHighlight } from "./capture-decision";
 import { runCaptureAndDraft } from "./capture-and-draft-flow";
 import { DEFAULT_SETTINGS, LoopbackSettings, LoopbackSettingTab } from "./settings";
 import { runDraftingCommand } from "./drafting-command";
@@ -94,6 +94,8 @@ function buildHighlightAdapter(settings: LoopbackSettings): HighlightAdapter {
 
 export default class LoopbackPlugin extends Plugin {
 	settings: LoopbackSettings;
+	/** The highlighter mode ribbon element, kept so its on/off state can be shown. */
+	private highlighterRibbon: HTMLElement | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -120,6 +122,32 @@ export default class LoopbackPlugin extends Plugin {
 		// plugin is named for.
 		this.addRibbonIcon("rotate-ccw", "Open Loopback review queue", () => {
 			void this.openReviewQueue();
+		});
+
+		// Highlighter mode, the drag-to-capture toggle. A mode rather than
+		// always-on behavior, because with it always on every selection made
+		// to scroll, to copy, or by accident becomes a card. Janus solves the
+		// same problem the same way, with a highlighter toggle in its own
+		// document toolbar.
+		this.highlighterRibbon = this.addRibbonIcon("pen-line", "Loopback highlighter mode", () => {
+			void this.toggleHighlighterMode();
+		});
+		this.reflectHighlighterMode();
+
+		this.addCommand({
+			id: "toggle-highlighter-mode",
+			name: "Toggle highlighter mode",
+			callback: () => {
+				void this.toggleHighlighterMode();
+			},
+		});
+
+		// Deferred by one tick: on mouseup the browser has not always settled
+		// the selection yet, and reading it synchronously here returns the
+		// previous one or nothing at all.
+		this.registerDomEvent(document, "mouseup", () => {
+			if (!this.settings.highlighterMode) return;
+			window.setTimeout(() => void this.captureHighlighterDrag(), 0);
 		});
 
 		this.addCommand({
@@ -373,6 +401,81 @@ export default class LoopbackPlugin extends Plugin {
 			capture: async () => {
 				await this.appendToInbox(serializeCapture(record));
 				new Notice(`Loopback: capture saved, drafting started.`);
+			},
+			reveal: async () => {
+				await this.openReviewQueue();
+			},
+			draft: async () => {
+				const result = await runDraftingCommand(this.app, this.settings.inboxPath, buildDraftAdapter(this.settings));
+				const reviewView = this.getReviewView();
+				if (!reviewView || !result) return;
+				const prefix = `${record.id}: `;
+				for (const message of result.errors) {
+					if (message.startsWith(prefix)) {
+						reviewView.reportDraftError(record.id, message.slice(prefix.length));
+					}
+				}
+				await reviewView.refresh();
+			},
+		});
+	}
+
+	async toggleHighlighterMode(): Promise<void> {
+		this.settings.highlighterMode = !this.settings.highlighterMode;
+		await this.saveSettings();
+		this.reflectHighlighterMode();
+		new Notice(`Loopback: highlighter mode ${this.settings.highlighterMode ? "on, drag to highlight and capture" : "off"}.`);
+	}
+
+	/** Show the mode in the ribbon, so it is never a hidden state the reader has to remember. */
+	private reflectHighlighterMode(): void {
+		this.highlighterRibbon?.toggleClass("loopback-highlighter-on", this.settings.highlighterMode);
+	}
+
+	/**
+	 * A drag finished with highlighter mode on: mark the passage and capture
+	 * it, in that order, with no key pressed.
+	 *
+	 * The selection is collapsed at the end, and that is load-bearing rather
+	 * than tidiness. Without it the passage stays selected, the next mouseup
+	 * anywhere sees the same selection still standing, and the same passage is
+	 * captured again and again.
+	 */
+	private async captureHighlighterDrag(): Promise<void> {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view) return;
+		const editor = view.editor;
+
+		const marking = markSelectionAsHighlight(editor.getSelection());
+		if (marking.quote.length === 0) return;
+
+		if (await shouldRefuseCapture(this.app, this.settings)) {
+			new Notice(
+				`Loopback: capture refused. More than ${MAX_PENDING_DRAFTS} drafts are pending review. Open the review queue and clear some before capturing more.`
+			);
+			return;
+		}
+
+		const sourcePath = view.file ? view.file.path : "unknown";
+		const cursorLine = editor.getCursor("from").line;
+		const lines: string[] = [];
+		for (let line = 0; line <= cursorLine; line++) {
+			lines.push(editor.getLine(line));
+		}
+		const record = buildCaptureRecord({ selectionText: marking.quote, sourcePath, lines, cursorLine });
+
+		// Mark first, so the passage is visibly highlighted even if everything
+		// after this fails. Already-marked passages are left exactly as they
+		// are; re-dragging one must not produce "====text====".
+		if (marking.replacement !== undefined) {
+			editor.replaceSelection(marking.replacement);
+		}
+		editor.setCursor(editor.getCursor("to"));
+
+		await runCaptureAndDraft({
+			capture: async () => {
+				await this.appendToInbox(serializeCapture(record));
+				new Notice(marking.alreadyMarked ? "Loopback: already highlighted, captured." : "Loopback: highlighted and captured.");
 			},
 			reveal: async () => {
 				await this.openReviewQueue();

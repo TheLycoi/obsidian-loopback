@@ -36,6 +36,16 @@ export interface LoopbackSettings {
 	/** Vault-relative path to the append-only disposition log: every approve, edit-then-approve, and discard, with a timestamp. */
 	dispositionLogPath: string;
 	/**
+	 * Highlighter mode. When on, dragging across a passage in a note marks it
+	 * with Obsidian's own "==" syntax and captures it in one motion, with no
+	 * key pressed. Off by default and deliberately so: with it on, every
+	 * selection is a capture, including the ones a reader makes to scroll or
+	 * to copy something. It is a mode rather than always-on behavior for the
+	 * same reason a highlighter is a pen you pick up rather than the surface
+	 * of your desk.
+	 */
+	highlighterMode: boolean;
+	/**
 	 * Which sidebar the review queue view opens a fresh leaf in. Defaults to
 	 * right, but a right sidebar already occupied by another plugin the owner
 	 * uses constantly is exactly the case this exists for: set it to left and
@@ -57,6 +67,7 @@ export const DEFAULT_SETTINGS: LoopbackSettings = {
 	vaultApiKey: "",
 	exportDeck: "All::2 Default::Wiki",
 	dispositionLogPath: "loopback-disposition-log.md",
+	highlighterMode: false,
 	reviewSidebarSide: "right",
 };
 

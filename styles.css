@@ -109,3 +109,11 @@ fit on screen at once, with no wasted vertical space between them.
 	color: var(--text-muted);
 	font-size: 0.85em;
 }
+
+/* Highlighter mode on: the ribbon icon takes the accent colour so the mode
+   is visible at a glance rather than being a state the reader has to
+   remember having toggled. */
+.loopback-highlighter-on {
+	color: var(--text-accent);
+	background-color: var(--background-modifier-hover);
+}

@@ -57,3 +57,54 @@ export function buildCaptureRecord(input: CaptureRecordInput): Capture {
 		quote: input.selectionText,
 	};
 }
+
+/**
+ * What to do when the reader drags across a passage with highlighter mode
+ * on. TCK-082.
+ *
+ * Two rules, and the second one is the reader's own: mark the passage so it
+ * is visibly highlighted from then on, unless it is highlighted already, in
+ * which case leave the text alone and capture it as it stands. Re-dragging
+ * over a passage you already marked must not turn "==text==" into
+ * "====text====", which renders as literal equals signs rather than a
+ * highlight.
+ *
+ * Obsidian's own "==" syntax is used rather than a Loopback-specific
+ * marker. It renders as a highlight natively in both reading and live
+ * preview, it survives in plain Markdown when this plugin is uninstalled,
+ * and it is what a reader would have typed by hand.
+ *
+ * Pure, so the marking rule is proven without an editor, a document, or
+ * Obsidian.
+ */
+export interface HighlightMarking {
+	/** Replacement text for the selection, or undefined when it is already marked and must be left exactly as it is. */
+	replacement: string | undefined;
+	/** The passage to capture, always free of marker syntax so a card is never built around "==". */
+	quote: string;
+	alreadyMarked: boolean;
+}
+
+const HIGHLIGHT_MARKER = "==";
+
+export function markSelectionAsHighlight(selectedText: string): HighlightMarking {
+	const trimmed = selectedText.trim();
+	if (trimmed.length === 0) {
+		return { replacement: undefined, quote: "", alreadyMarked: false };
+	}
+
+	const wrapped =
+		trimmed.length > HIGHLIGHT_MARKER.length * 2 &&
+		trimmed.startsWith(HIGHLIGHT_MARKER) &&
+		trimmed.endsWith(HIGHLIGHT_MARKER);
+
+	if (wrapped) {
+		return {
+			replacement: undefined,
+			quote: trimmed.slice(HIGHLIGHT_MARKER.length, -HIGHLIGHT_MARKER.length).trim(),
+			alreadyMarked: true,
+		};
+	}
+
+	return { replacement: `${HIGHLIGHT_MARKER}${trimmed}${HIGHLIGHT_MARKER}`, quote: trimmed, alreadyMarked: false };
+}
