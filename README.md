@@ -20,25 +20,51 @@ way.
 
 ## What it does today
 
-- Command: "Capture selection." Select text in an open note, run the
-  command, and the selection is appended to the inbox file at the vault
-  root, along with the file it came from, the nearest heading or a line
-  number, and the time of capture.
-- Default hotkey: Cmd+Shift+L on macOS, Ctrl+Shift+L elsewhere. Reassign it
-  from Settings, Hotkeys, like any other command.
-- Capturing with no selection does nothing to the inbox file. A notice says
-  there was nothing to capture.
-- Command: "Draft pending captures." Reads every capture in the inbox
-  still marked `captured`, sends its passage to whichever provider is
-  configured in Settings, and appends the candidate cards it gets back as
-  draft blocks in the same inbox file. See "Drafting" below.
-- Command: "Open review queue." Opens a view listing every pending draft
-  beside the source passage it came from. Approve, edit then approve, or
-  discard each one; bulk approve and bulk discard act on whatever is
-  checked. See "Review queue and export" below.
-- A settings tab holds the inbox file path, the drafting provider and model
-  id, where the API key is read from, the AnkiConnect URL, the export deck,
-  and the disposition log path.
+Two ribbon icons, so nothing here needs the command palette. A
+counter-clockwise arrow opens the review queue. A pen toggles highlighter
+mode and takes the accent colour while it is on.
+
+Capturing from a note:
+
+- Highlighter mode. Toggle the pen icon on, then drag across a passage in
+  any note. It is marked with Obsidian's own `==highlight==` syntax and
+  captured, with no key pressed. Dragging over a passage that is already
+  highlighted leaves the text alone and captures it as it stands, so
+  re-reading never produces `====text====`. Off by default, because with it
+  on every selection is a capture, including the ones made to scroll or to
+  copy.
+- Command: "Capture and draft selection," Cmd or Ctrl, Shift, Enter. From a
+  selection it captures, opens the review sidebar, and starts drafting, in
+  that order. Capture is written first, so an interrupted draft never
+  loses the passage.
+- Command: "Capture selection," Cmd or Ctrl, Shift, L. Captures and stops.
+  This is the lecture case: capture now, draft later, no model call.
+- Capturing with no selection does nothing. A notice says so.
+
+Capturing from a PDF:
+
+- Command: "Capture and draft PDF highlight," Cmd or Ctrl, Shift, P. Open a
+  PDF in Obsidian, drag-select a passage, press it. The page number comes
+  from the viewer rather than from you. Nothing is typed and no dialog
+  opens.
+- Command: "Capture from PDF." The older path: pick a file, type a page
+  number, paste a quote. Kept because it works when a PDF has no usable
+  text layer.
+- Command: "Automatic highlight (PDF)." Proposes spans across a document
+  with a model, keeps only the ones grounded in the page they claim to come
+  from, and captures each as a normal capture.
+
+Drafting, review, and export:
+
+- Command: "Draft pending captures." Reads every capture still marked
+  `captured`, sends its passage to the configured provider, and appends the
+  candidate cards as draft blocks in the same inbox file.
+- Command: "Open review queue." Lists every pending draft beside the source
+  passage it came from, grouped by capture. Approve, edit then approve, or
+  discard; bulk approve and bulk discard act on whatever is checked.
+- A settings tab holds the inbox path, provider and model id, where the API
+  key is read from, the AnkiConnect URL, the export deck, the disposition
+  log path, and which sidebar the review queue opens in.
 
 ## What it deliberately does not do
 
@@ -182,10 +208,16 @@ Drafting never runs as part of capture and never blocks it. It is its own
 command, so a slow or failing model call adds no latency to the one-second
 capture budget.
 
-Key resolution follows the order in Settings: an environment variable
-first, the OS keychain second, and an in-vault setting last, read only when
-the owner has explicitly chosen it. A key is never logged, never written to
-the inbox file, and never included in an error message.
+Key resolution runs in a fixed order: the environment variable first, then
+the OS keychain under the plugin's own service name ("Loopback Anthropic
+API key"), then the OS keychain under the environment variable's name
+("ANTHROPIC_API_KEY"), and an in-vault setting last, read only when the
+owner has explicitly chosen it. The second keychain name matters on macOS,
+where a GUI app launched from the Dock does not inherit a shell's
+environment, so an exported variable is invisible to Obsidian and a key
+stored in the keychain under the conventional name is the one that
+actually resolves. A key is never logged, never written to the inbox file,
+and never included in an error message.
 
 ## Review queue and export
 
@@ -393,12 +425,33 @@ No test in this repository makes a network call or uses a real API key.
 
 ## Installing into a vault
 
-This repository does not install itself into any vault. To try it, copy
-`manifest.json`, `main.js`, and (if present) `styles.css` into
-`<vault>/.obsidian/plugins/loopback/` after running `npm run build`, then
-enable it from Community Plugins, Installed Plugins in Obsidian. Installing
-the plugin into a specific vault is a decision for whoever owns that vault,
-not something this repository does on its own.
+This repository does not install itself into any vault, and `main.js` is
+not committed, so a clone alone is not runnable.
+
+To test it in another vault, take the three files from the latest release
+(`manifest.json`, `main.js`, `styles.css`), put them in
+`<vault>/.obsidian/plugins/loopback/`, and enable Loopback from Community
+Plugins, Installed Plugins.
+
+To build it yourself instead:
+
+```
+npm install
+npm run build
+```
+
+then copy the same three files out of the repository root into that same
+folder.
+
+Either way, Obsidian reads `main.js` once when the plugin is enabled and
+keeps it in memory. Copying a newer build underneath a running Obsidian
+changes nothing until the plugin is toggled off and on, or Obsidian is
+restarted. This is the single most common reason a change appears to have
+had no effect.
+
+Nothing reaches Anki without a human approving that specific draft, so a
+test vault can be pointed at a real collection without risk of unattended
+writes. Drafting does need an API key; capture, review, and discard do not.
 
 ## License
 
